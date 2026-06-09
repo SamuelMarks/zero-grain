@@ -1,6 +1,5 @@
 """Module docstring."""
 
-import pytest
 from zero_grain import python
 
 

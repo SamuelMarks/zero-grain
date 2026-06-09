@@ -15,12 +15,6 @@ from typing import (
     Callable,
     Sequence,
     TypeVar,
-    Generic,
-    Tuple,
-    List,
-    Dict,
-    Optional,
-    Union,
 )
 
 _IN = TypeVar("_IN")
@@ -51,12 +45,8 @@ class ArrayRecordDataSource:
         self,
         paths: str
         | os.PathLike
-        | array_record.python.array_record_data_source.FileInstruction
-        | collections.abc.Sequence[
-            str
-            | os.PathLike
-            | array_record.python.array_record_data_source.FileInstruction
-        ],
+        | Any
+        | collections.abc.Sequence[str | os.PathLike | Any],
         reader_options: dict[str, str] | None = None,
     ):
         """Docstring for __init__."""
@@ -148,22 +138,22 @@ class DataLoader:
     def __init__(
         self,
         *,
-        data_source: grain._src.python.data_sources.RandomAccessDataSource,
-        sampler: grain._src.python.samplers.Sampler,
+        data_source: RandomAccessDataSource,
+        sampler: Sampler,
         operations: Sequence[
-            grain._src.core.transforms.Batch
-            | grain._src.core.transforms.MapTransform
-            | grain._src.core.transforms.RandomMapTransform
-            | grain._src.core.transforms.TfRandomMapTransform
-            | grain._src.core.transforms.Filter
-            | grain._src.core.transforms.FlatMapTransform
-            | grain._src.core.transforms.MapWithIndex
-            | grain._src.python.operations.Operation
+            Batch
+            | MapTransform
+            | RandomMapTransform
+            | Any
+            | Filter
+            | Any
+            | MapWithIndex
+            | Operation
         ] = (),
         worker_count: int | None = 0,
         worker_buffer_size: int = 1,
-        shard_options: grain._src.core.sharding.ShardOptions | None = None,
-        read_options: grain._src.python.options.ReadOptions | None = None,
+        shard_options: ShardOptions | None = None,
+        read_options: ReadOptions | None = None,
         enable_profiling: bool = False,
     ):
         """Docstring for __init__."""
@@ -203,7 +193,7 @@ class DataLoaderIterator:
 
     def __init__(
         self,
-        data_loader: grain._src.python.data_loader.DataLoader,
+        data_loader: DataLoader,
         state: dict[str, Any] | None = None,
         validate_state: bool = True,
     ):
@@ -298,10 +288,7 @@ class DatasetIterator:
 
     def __init__(
         self,
-        parents: grain._src.python.dataset.dataset.DatasetIterator
-        | collections.abc.Sequence[
-            grain._src.python.dataset.dataset.DatasetIterator
-        ] = (),
+        parents: DatasetIterator | collections.abc.Sequence[DatasetIterator] = (),
     ):
         """Docstring for __init__."""
         pass  # pragma: no cover
@@ -359,7 +346,7 @@ class IndexSampler:
     def __init__(
         self,
         num_records: int,
-        shard_options: grain._src.core.sharding.ShardOptions = NoSharding(
+        shard_options: ShardOptions = NoSharding(
             shard_index=0, shard_count=1, drop_remainder=False
         ),
         shuffle: bool = False,
@@ -429,12 +416,9 @@ class IterDataset:
 
     def __init__(
         self,
-        parents: grain._src.python.dataset.dataset.MapDataset
-        | grain._src.python.dataset.dataset.IterDataset
-        | collections.abc.Sequence[
-            grain._src.python.dataset.dataset.MapDataset
-            | grain._src.python.dataset.dataset.IterDataset
-        ] = (),
+        parents: MapDataset
+        | IterDataset
+        | collections.abc.Sequence[MapDataset | IterDataset] = (),
     ):
         """Docstring for __init__."""
         pass  # pragma: no cover
@@ -456,8 +440,7 @@ class MapDataset:
 
     def __init__(
         self,
-        parents: grain._src.python.dataset.dataset.MapDataset
-        | collections.abc.Sequence[grain._src.python.dataset.dataset.MapDataset] = (),
+        parents: MapDataset | collections.abc.Sequence[MapDataset] = (),
     ):
         """Docstring for __init__."""
         pass  # pragma: no cover
@@ -660,9 +643,9 @@ class ReadOptions:
 
 
 class Record:
-    """Record(metadata: grain._src.python.record.RecordMetadata, data: ~T)"""
+    """Record(metadata: RecordMetadata, data: ~T)"""
 
-    def __init__(self, metadata: grain._src.python.record.RecordMetadata, data: ~T):
+    def __init__(self, metadata: RecordMetadata, data: ~T):
         """Docstring for __init__."""
         self.metadata = metadata
         self.data = data
@@ -701,7 +684,7 @@ class SequentialSampler:
     def __init__(
         self,
         num_records: int,
-        shard_options: grain._src.core.sharding.ShardOptions = NoSharding(
+        shard_options: ShardOptions = NoSharding(
             shard_index=0, shard_count=1, drop_remainder=False
         ),
         seed: int | None = None,
@@ -815,27 +798,21 @@ class SharedMemoryDataSource:
 
 
 def load(
-    source: grain._src.python.data_sources.RandomAccessDataSource,
+    source: RandomAccessDataSource,
     *,
     num_epochs: int | None = None,
     shuffle: bool = False,
     seed: int | None = None,
-    shard_options: grain._src.core.sharding.ShardOptions = NoSharding(
+    shard_options: ShardOptions = NoSharding(
         shard_index=0, shard_count=1, drop_remainder=False
     ),
     transformations: collections.abc.Sequence[
-        grain._src.core.transforms.Batch
-        | grain._src.core.transforms.MapTransform
-        | grain._src.core.transforms.RandomMapTransform
-        | grain._src.core.transforms.TfRandomMapTransform
-        | grain._src.core.transforms.Filter
-        | grain._src.core.transforms.FlatMapTransform
-        | grain._src.core.transforms.MapWithIndex
+        Batch | MapTransform | RandomMapTransform | Any | Filter | Any | MapWithIndex
     ] = (),
     batch_size: int | None = None,
     drop_remainder: bool = False,
     worker_count: int | None = 0,
-    read_options: grain._src.python.options.ReadOptions | None = None,
+    read_options: ReadOptions | None = None,
 ):
     """Docstring for load."""
     sampler = IndexSampler(

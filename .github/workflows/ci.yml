@@ -23,9 +23,9 @@ jobs:
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install ruff pytest pytest-cov build
-        if [ -f "pyproject.toml" ]; then pip install -e . || true; fi
-        if [ -f "requirements.txt" ]; then pip install -r requirements.txt || true; fi
+        pip install ruff==0.15.16 pytest pytest-cov build
+        if [ -f "pyproject.toml" ]; then pip install -e .; fi
+        if [ -f "requirements.txt" ]; then pip install -r requirements.txt; fi
 
     - name: Check Code Formatting (Ruff)
       run: ruff format --check .
@@ -35,7 +35,7 @@ jobs:
 
     - name: Test & Coverage
       run: |
-        pytest --cov=. --cov-report=xml
+        PYTHONPATH=src pytest --cov=src --cov-report=xml
         
     - name: Update Badges
       run: |
