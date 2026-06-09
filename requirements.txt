@@ -1,0 +1,2 @@
+numpy
+zero-jax @ git+https://github.com/SamuelMarks/zero-jax.git@master

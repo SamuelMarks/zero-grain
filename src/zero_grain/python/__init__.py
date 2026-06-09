@@ -1,5 +1,11 @@
+"""Module docstring."""
+
 from __future__ import annotations
-import zero_jax
+
+try:
+    import zero_jax
+except ImportError:  # pragma: no cover
+    zero_jax = None
 import numpy
 
 import collections.abc
@@ -23,14 +29,18 @@ T = TypeVar("T")
 
 
 class NoSharding:
+    """Docstring for NoSharding."""
+
     def __init__(
         self, shard_index: int = 0, shard_count: int = 1, drop_remainder: bool = False
     ):
+        """Docstring for __init__."""
         self.shard_index = shard_index
         self.shard_count = shard_count
         self.drop_remainder = drop_remainder
 
     def __repr__(self):
+        """Docstring for __repr__."""
         return "NoSharding(shard_index=0, shard_count=1, drop_remainder=False)"
 
 
@@ -49,6 +59,7 @@ class ArrayRecordDataSource:
         ],
         reader_options: dict[str, str] | None = None,
     ):
+        """Docstring for __init__."""
         self.paths = paths
         self.reader_options = reader_options
         self._records = []
@@ -62,9 +73,11 @@ class ArrayRecordDataSource:
                     pass
 
     def __len__(self):
+        """Docstring for __len__."""
         return len(self._records)
 
     def __getitem__(self, idx):
+        """Docstring for __getitem__."""
         return self._records[idx]  # pragma: no cover
 
 
@@ -78,6 +91,7 @@ class Batch:
         batch_fn: collections.abc.Callable[[collections.abc.Sequence[Any]], Any]
         | None = None,
     ):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -99,11 +113,13 @@ class BatchOperation:
         drop_remainder: bool = False,
         batch_fn: Callable[[Sequence[~_IN]], ~_OUT] | None = None,
     ):
+        """Docstring for __init__."""
         self.batch_size = batch_size
         self.drop_remainder = drop_remainder
         self.batch_fn = batch_fn
 
     def __call__(self, records: Sequence[Record]) -> Record:
+        """Docstring for __call__."""
         if not records:
             return None
         # Inherit metadata from the first record in the batch
@@ -122,6 +138,7 @@ class CheckpointHandler:
     """Orbax CheckpointHandler for PyGrain iterators."""
 
     def __init__(self, *args, **kwargs):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -149,6 +166,7 @@ class DataLoader:
         read_options: grain._src.python.options.ReadOptions | None = None,
         enable_profiling: bool = False,
     ):
+        """Docstring for __init__."""
         self.data_source = data_source
         self.sampler = sampler
         self.operations = operations
@@ -159,6 +177,7 @@ class DataLoader:
         self.enable_profiling = enable_profiling
 
     def __iter__(self):
+        """Docstring for __iter__."""
         return DataLoaderIterator(data_loader=self, state=None)
 
 
@@ -188,6 +207,7 @@ class DataLoaderIterator:
         state: dict[str, Any] | None = None,
         validate_state: bool = True,
     ):
+        """Docstring for __init__."""
         self.data_loader = data_loader
         self.state = state
         self.validate_state = validate_state
@@ -202,9 +222,11 @@ class DataLoaderIterator:
             self.set_state(self.state)
 
     def __iter__(self):
+        """Docstring for __iter__."""
         return self  # pragma: no cover
 
     def _apply_ops(self, record):
+        """Docstring for _apply_ops."""
         for op in self.data_loader.operations:
             if record is None:
                 break  # pragma: no cover
@@ -216,6 +238,7 @@ class DataLoaderIterator:
 
     def __next__(self):
         # Determine if there's a batch operation at the end
+        """Docstring for __next__."""
         batch_op = None
         if self.data_loader.operations and getattr(
             self.data_loader.operations[-1], "batch_size", None
@@ -258,9 +281,11 @@ class DataLoaderIterator:
                     return rec
 
     def get_state(self):
+        """Docstring for get_state."""
         return {"last_seen_indices": self._last_seen_indices}
 
     def set_state(self, state):
+        """Docstring for set_state."""
         self._last_seen_indices = state.get("last_seen_indices", {})
         # Note: In a real implementation this would fast-forward the sampler.
 
@@ -278,6 +303,7 @@ class DatasetIterator:
             grain._src.python.dataset.dataset.DatasetIterator
         ] = (),
     ):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -289,6 +315,7 @@ class DatasetSelectionMap:
     multiple processes."""
 
     def __init__(self, *args, **kwargs):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -302,6 +329,7 @@ class Filter:
     parallel."""
 
     def __init__(self, *args, **kwargs):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -309,9 +337,11 @@ class FilterOperation:
     """Yields records from input iterator satisfying user-provided condition."""
 
     def __init__(self, condition_function: Callable[[~_IN], bool]):
+        """Docstring for __init__."""
         self.condition_function = condition_function
 
     def __call__(self, record: Record) -> Record | None:
+        """Docstring for __call__."""
         if record is None or record.data is None:
             return record
         if self.condition_function(record.data):
@@ -336,6 +366,7 @@ class IndexSampler:
         num_epochs: int | None = None,
         seed: int | None = None,
     ):
+        """Docstring for __init__."""
         self.num_records = num_records
         self.shard_options = shard_options
         self.shuffle = shuffle
@@ -350,6 +381,7 @@ class IndexSampler:
             self._do_shuffle()
 
     def _apply_sharding(self):
+        """Docstring for _apply_sharding."""
         if getattr(self.shard_options, "drop_remainder", False):
             limit = (
                 self.num_records // getattr(self.shard_options, "shard_count", 1)
@@ -363,6 +395,7 @@ class IndexSampler:
         ]
 
     def _do_shuffle(self):
+        """Docstring for _do_shuffle."""
         import random
 
         # Seed depends on epoch to ensure deterministic but different shuffle per epoch
@@ -370,9 +403,11 @@ class IndexSampler:
         rng.shuffle(self._indices)
 
     def __iter__(self):
+        """Docstring for __iter__."""
         return self  # pragma: no cover
 
     def __next__(self):
+        """Docstring for __next__."""
         if self._index_within_epoch >= len(self._indices):
             self._epoch += 1
             if self.num_epochs is not None and self._epoch >= self.num_epochs:
@@ -401,6 +436,7 @@ class IterDataset:
             | grain._src.python.dataset.dataset.IterDataset
         ] = (),
     ):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -423,6 +459,7 @@ class MapDataset:
         parents: grain._src.python.dataset.dataset.MapDataset
         | collections.abc.Sequence[grain._src.python.dataset.dataset.MapDataset] = (),
     ):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -430,10 +467,12 @@ class MapOperation:
     """Applies user-provided map_function to input records."""
 
     def __init__(self, map_function: Callable[[~_IN], ~_OUT]):
+        """Docstring for __init__."""
         self.map_function = map_function
 
     def __call__(self, record: Record) -> Record:
         # Note: We must preserve metadata.
+        """Docstring for __call__."""
         if record is None or record.data is None:
             return record
         return Record(metadata=record.metadata, data=self.map_function(record.data))
@@ -446,6 +485,7 @@ class MapTransform:
     parallel."""
 
     def __init__(self, *args, **kwargs):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -456,6 +496,7 @@ class MapWithIndex:
     parallel."""
 
     def __init__(self, *args, **kwargs):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -480,6 +521,7 @@ class MultiprocessingOptions:
         per_worker_buffer_size: int = 1,
         enable_profiling: bool = False,
     ):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -516,6 +558,7 @@ class Operation:
                 ..."""
 
     def __init__(self, *args, **kwargs):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -526,6 +569,7 @@ class RandomAccessDataSource:
     work with this source."""
 
     def __init__(self, *args, **kwargs):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -536,9 +580,11 @@ class RandomMapOperation:
         self,
         random_map_function: Callable[[~_IN, numpy.random._generator.Generator], ~_OUT],
     ):
+        """Docstring for __init__."""
         self.random_map_function = random_map_function
 
     def __call__(self, record: Record) -> Record:
+        """Docstring for __call__."""
         if record is None or record.data is None:
             return record
         import random
@@ -561,6 +607,7 @@ class RandomMapTransform:
     parallel."""
 
     def __init__(self, *args, **kwargs):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -568,6 +615,7 @@ class RangeDataSource:
     """Range data source, similar to python range() function."""
 
     def __init__(self, start: int, stop: int, step: int):
+        """Docstring for __init__."""
         self.start = start
         self.stop = stop
         self.step = step
@@ -578,9 +626,11 @@ class RangeDataSource:
         )
 
     def __len__(self):
+        """Docstring for __len__."""
         return self._len
 
     def __getitem__(self, idx):
+        """Docstring for __getitem__."""
         if idx < 0 or idx >= self._len:
             raise IndexError("Index out of bounds")
         return self.start + idx * self.step
@@ -605,6 +655,7 @@ class ReadOptions:
         system."""
 
     def __init__(self, num_threads: int = 16, prefetch_buffer_size: int = 500):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -612,6 +663,7 @@ class Record:
     """Record(metadata: grain._src.python.record.RecordMetadata, data: ~T)"""
 
     def __init__(self, metadata: grain._src.python.record.RecordMetadata, data: ~T):
+        """Docstring for __init__."""
         self.metadata = metadata
         self.data = data
 
@@ -629,6 +681,7 @@ class RecordMetadata:
         record_key: int | None = None,
         rng: numpy.random._generator.Generator | None = None,
     ):
+        """Docstring for __init__."""
         self.index = index
         self.record_key = record_key
         self.rng = rng
@@ -638,6 +691,7 @@ class Sampler:
     """Interface for PyGrain-compatible sampler."""
 
     def __init__(self, *args, **kwargs):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -652,6 +706,7 @@ class SequentialSampler:
         ),
         seed: int | None = None,
     ):
+        """Docstring for __init__."""
         self.num_records = num_records
         self.shard_options = shard_options
         self.seed = seed
@@ -666,9 +721,11 @@ class SequentialSampler:
             self._limit = self.num_records
 
     def __iter__(self):
+        """Docstring for __iter__."""
         return self  # pragma: no cover
 
     def __next__(self):
+        """Docstring for __next__."""
         while self._current_index < self._limit:
             idx = self._current_index
             self._current_index += 1
@@ -683,6 +740,7 @@ class ShardByJaxProcess:
     """Shards the data across JAX processes."""
 
     def __init__(self, drop_remainder: bool = False):
+        """Docstring for __init__."""
         self.drop_remainder = drop_remainder
         self.shard_index = 0
         self.shard_count = 1
@@ -702,6 +760,7 @@ class ShardOptions:
     def __init__(
         self, shard_index: int, shard_count: int, drop_remainder: bool = False
     ):
+        """Docstring for __init__."""
         pass  # pragma: no cover
 
 
@@ -717,9 +776,11 @@ class SharedMemoryArray(numpy.ndarray):
     the memory will not be freed."""
 
     def __new__(cls, *args, **kwargs):
+        """Docstring for __new__."""
         return numpy.asarray(*args, **kwargs).view(cls)
 
     def __init__(self, *args, **kwargs):
+        """Docstring for __init__."""
         self._args = args
         self._kwargs = kwargs
 
@@ -740,13 +801,16 @@ class SharedMemoryDataSource:
         *,
         name: str | None = None,
     ):
+        """Docstring for __init__."""
         self.elements = elements or []
         self.name = name
 
     def __len__(self):
+        """Docstring for __len__."""
         return len(self.elements)
 
     def __getitem__(self, idx):
+        """Docstring for __getitem__."""
         return self.elements[idx]
 
 
@@ -773,6 +837,7 @@ def load(
     worker_count: int | None = 0,
     read_options: grain._src.python.options.ReadOptions | None = None,
 ):
+    """Docstring for load."""
     sampler = IndexSampler(
         num_records=0,
         shard_options=shard_options,
@@ -798,6 +863,7 @@ InMemoryDataSource = SharedMemoryDataSource
 
 # Define generic __init__
 def _generic_init(self, *args, **kwargs):
+    """Docstring for _generic_init."""
     for k, v in kwargs.items():
         setattr(self, k, v)
 
@@ -843,10 +909,11 @@ try:
     tree_map = getattr(tree_util, "tree_map", None)
 
     def tree_collate(records):
+        """Docstring for tree_collate."""
         return (
             tree_map(lambda *leaves: numpy.stack(leaves), *records)
             if tree_map
             else None
         )
 except ImportError:  # pragma: no cover
-    pass
+    tree_map = None

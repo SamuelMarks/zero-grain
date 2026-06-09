@@ -1,14 +1,17 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling", "hatch-requirements-txt"]
+build-backend = "hatchling.build"
 
 [project]
 name = "zero_grain"
 version = "0.2.16.dev20260112"
-dependencies = [
-    "numpy",
-    "zero-jax @ file://localhost/Users/samuel/repos/zero-jax"
-]
+dynamic = ["dependencies"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.metadata.hooks.requirements_txt]
+files = ["requirements.txt"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zero_grain"]
