@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zero_grain"
+version = "0.2.16.dev20260112"
+dependencies = [
+    "numpy",
+    "zero-jax @ file://localhost/Users/samuel/repos/zero-jax"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
