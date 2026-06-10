@@ -23,7 +23,7 @@ This enables you to write your data pipelines *once* using the standard grain AP
 
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/SamuelMarks/zero-grain/actions/workflows/ci.yml/badge.svg)](https://github.com/SamuelMarks/zero-grain/actions)
-[![Test Coverage](https://img.shields.io/badge/test_coverage-62.5%25-orange.svg)](#)
+[![Test Coverage](https://img.shields.io/badge/test_coverage-80.4%25-yellowgreen.svg)](#)
 [![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)
 
 
