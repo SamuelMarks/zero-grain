@@ -1,3 +1,7 @@
+# Zero Framework API Shell
+
+> **Note:** This repository is an API-compatible shell. All underlying math, autodiff, and graph execution has been migrated to the [ml-switcheroo-compiler](https://github.com/SamuelMarks/ml-switcheroo-compiler) backend. This repository purely implements frontend routing and syntactic parity for the target framework.
+
 # zero-grain
 
 zero-grain is a 100% dependency-free (except for [numpy](https://numpy.org/)), API-compatible implementation of [Google's Grain](https://github.com/google/grain) data loader framework.
@@ -19,7 +23,7 @@ This enables you to write your data pipelines *once* using the standard grain AP
 
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/SamuelMarks/zero-grain/actions/workflows/ci.yml/badge.svg)](https://github.com/SamuelMarks/zero-grain/actions)
-[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)
+[![Test Coverage](https://img.shields.io/badge/test_coverage-62.5%25-orange.svg)](#)
 [![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)
 
 

@@ -1,7 +1,6 @@
-"""
-zero_grain framework.
-"""
+import ml_switcheroo
 
+"\nzero_grain framework.\n"
 from .python import (
     ArrayRecordDataSource,
     Batch,

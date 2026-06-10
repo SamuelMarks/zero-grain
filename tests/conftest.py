@@ -1,7 +1,18 @@
-"""Module docstring."""
-
+import pytest
 import sys
-from unittest.mock import MagicMock
+import os
 
-sys.modules["zero_jax"] = MagicMock()
-sys.modules["zero_jax.tree_util"] = MagicMock()
+sys.path.insert(
+    0,
+    os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../../ml-switcheroo-compiler/src")
+    ),
+)
+import ml_switcheroo
+
+
+@pytest.fixture(autouse=True)
+def switcheroo_config():
+    # Unified pytest configuration that imports switcheroo config contexts
+    with ml_switcheroo.EagerMode():
+        yield
