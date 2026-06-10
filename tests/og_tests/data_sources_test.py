@@ -1,3 +1,5 @@
+"""Module docstring."""
+
 from __future__ import annotations
 
 # Copyright 2023 Google LLC
@@ -37,6 +39,8 @@ FLAGS = flags.FLAGS
 
 @dataclasses.dataclass
 class DummyFileInstruction:
+    """Docstring for DummyFileInstruction."""
+
     filename: str
     skip: int
     take: int
@@ -44,7 +48,10 @@ class DummyFileInstruction:
 
 
 class DataSourceTest(parameterized.TestCase):
+    """Docstring for DataSourceTest."""
+
     def setUp(self):
+        """Docstring for setUp."""
         super().setUp()
         self.testdata_dir = pathlib.Path(".")
 
@@ -58,6 +65,7 @@ class RangeDataSourceTest(DataSourceTest):
         ]
     )
     def test_range_data_source(self, start, stop, step):
+        """Docstring for test_range_data_source."""
         expected_output = list(range(start, stop, step))
 
         range_ds = data_sources.RangeDataSource(start, stop, step)
@@ -67,7 +75,10 @@ class RangeDataSourceTest(DataSourceTest):
 
 
 class InMemoryDataSourceTest(DataSourceTest):
+    """Docstring for InMemoryDataSourceTest."""
+
     def test_single_process(self):
+        """Docstring for test_single_process."""
         sequence = list(range(12))
         in_memory_ds = data_sources.SharedMemoryDataSource(sequence)
 
@@ -84,10 +95,12 @@ class InMemoryDataSourceTest(DataSourceTest):
     def read_elements(
         in_memory_ds: data_sources.SharedMemoryDataSource, indices: Sequence[int]
     ) -> Sequence[Any]:
+        """Docstring for read_elements."""
         res = [in_memory_ds[i] for i in indices]
         return res
 
     def test_multi_processes_co_read(self):
+        """Docstring for test_multi_processes_co_read."""
         sequence = list(range(12))
         in_memory_ds = data_sources.SharedMemoryDataSource(
             sequence, name="DataSourceTestingCoRead"
@@ -118,6 +131,7 @@ class InMemoryDataSourceTest(DataSourceTest):
         in_memory_ds.unlink()
 
     def test_empty_sequence(self):
+        """Docstring for test_empty_sequence."""
         in_memory_ds = data_sources.SharedMemoryDataSource([])
         self.assertEmpty(in_memory_ds)
 
@@ -125,6 +139,7 @@ class InMemoryDataSourceTest(DataSourceTest):
         in_memory_ds.unlink()
 
     def test_str(self):
+        """Docstring for test_str."""
         sequence = list(range(12))
         name = "DataSourceTestingStr"
         in_memory_ds = data_sources.SharedMemoryDataSource(sequence, name=name)
@@ -142,12 +157,16 @@ class InMemoryDataSourceTest(DataSourceTest):
     platform.system() == "Windows", "ArrayRecord isn't supported on Windows."
 )
 class ArrayRecordDataSourceTest(DataSourceTest):
+    """Docstring for ArrayRecordDataSourceTest."""
+
     def test_array_record_data_implements_random_access(self):
+        """Docstring for test_array_record_data_implements_random_access."""
         assert issubclass(
             data_sources.ArrayRecordDataSource, dataset_base.RandomAccessDataSource
         )
 
     def test_array_record_source_empty_sequence(self):
+        """Docstring for test_array_record_source_empty_sequence."""
         with self.assertRaises(ValueError):
             data_sources.ArrayRecordDataSource([])
 

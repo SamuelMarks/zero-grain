@@ -1,3 +1,5 @@
+"""Module docstring."""
+
 import ml_switcheroo
 
 "\nzero_grain framework.\n"

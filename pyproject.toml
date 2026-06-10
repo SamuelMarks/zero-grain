@@ -16,9 +16,12 @@ files = ["requirements.txt"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/zero_grain"]
 
-
-
 [tool.ruff.lint]
 ignore = ['E402', 'F401', 'F841', 'E741']
 
-dependencies = ["ml-switcheroo-compiler"]
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 100

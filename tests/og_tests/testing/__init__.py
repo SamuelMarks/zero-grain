@@ -1,3 +1,5 @@
+"""Module docstring."""
+
 from __future__ import annotations
 # Copyright 2025 Google LLC
 #

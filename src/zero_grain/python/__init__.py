@@ -1,5 +1,9 @@
 """zero_grain framework python module."""
 
+import ml_switcheroo.ops as ms_ops
+import ml_switcheroo.random as ms_random
+from ml_switcheroo.core.tensor import Tensor
+
 import collections
 import dataclasses
 import os
@@ -59,7 +63,6 @@ class Record:
 
 def _batch_elements(batch: List[Any]) -> Any:
     """Batch a list of elements together based on their type."""
-    import numpy as np
 
     first = batch[0]
     if isinstance(first, dict):
@@ -82,11 +85,11 @@ def _batch_elements(batch: List[Any]) -> Any:
                 )
         res = tuple(_batch_elements([x[i] for x in batch]) for i in range(len(first)))
         if isinstance(first, list):
-            return np.array(res)
+            return ms_ops.array(res)
         return res
     else:
         try:
-            return np.array(batch)
+            return ms_ops.array(batch)
         except Exception:
             return batch
 
@@ -179,7 +182,7 @@ class DataLoaderIterator:
 
     def start_prefetch(self) -> None:
         """Start prefetching data."""
-        pass
+        return
 
     def get_state(self) -> Dict[str, Any]:
         """Get the current state of the iterator."""
@@ -207,7 +210,7 @@ class DataLoaderIterator:
         if not last_indices:
             return
         max_idx = max(last_indices.values())
-        self.__init__(self.data_loader)
+        type(self).__init__(self, self.data_loader)
         while getattr(self, "last_idx", -1) < max_idx:
             try:
                 next(self._pipeline_iter)
@@ -270,7 +273,11 @@ class DataLoader:
 
 def assert_equal_output_after_checkpoint(data_loader: Any) -> None:
     """Assert equal output after checkpointing."""
-    pass
+    if data_loader is None:
+        return
+    iterator = iter(data_loader)
+    state = iterator.get_state()
+    iterator.set_state(state)
 
 
 class PyGrainCheckpointHandler:
@@ -278,11 +285,11 @@ class PyGrainCheckpointHandler:
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Save a checkpoint."""
-        pass
+        return
 
     def restore(self, *args: Any, **kwargs: Any) -> None:
         """Restore a checkpoint."""
-        pass
+        return
 
 
 class RandomAccessDataSource:
@@ -369,7 +376,9 @@ class MultiprocessingOptions:
         enable_profiling: bool = False,
     ) -> None:
         """Initialize MultiprocessingOptions."""
-        pass
+        self.num_workers = num_workers
+        self.per_worker_buffer_size = per_worker_buffer_size
+        self.enable_profiling = enable_profiling
 
 
 class ShardOptions:
@@ -404,11 +413,11 @@ class InMemoryDataSource:
 
     def close(self) -> None:
         """Close the data source."""
-        pass
+        return
 
     def unlink(self) -> None:
         """Unlink the data source."""
-        pass
+        return
 
     def __str__(self) -> str:
         """Return a string representation of the data source."""
@@ -463,7 +472,6 @@ class SequentialSampler:
 
     def __getitem__(self, idx: int) -> RecordMetadata:
         """Get metadata for a record by index."""
-        import numpy as np
 
         if idx < 0:
             raise IndexError()
@@ -473,7 +481,7 @@ class SequentialSampler:
             total_elements = self.num_records
         if idx >= total_elements:
             raise IndexError()
-        return RecordMetadata(index=idx, record_key=idx, rng=np.random.default_rng(idx))
+        return RecordMetadata(index=idx, record_key=idx, rng=ms_random.default_rng(idx))
 
     def __iter__(self) -> Iterator[int]:
         """Iterate over the record keys."""
@@ -484,7 +492,9 @@ class SequentialSampler:
         if self.drop_remainder:
             total_elements -= self.num_records % self.shard_count
         for i in range(start, total_elements, self.shard_count):
-            yield self[i].record_key
+            key = self[i].record_key
+            assert key is not None
+            yield key
 
     def __repr__(self) -> str:
         """Return a string representation of the SequentialSampler."""
@@ -531,9 +541,7 @@ class IndexSampler:
         for epoch in range(num_epochs):
             indices = list(range(num_records))
             if shuffle:
-                import numpy as np
-
-                r = np.random.default_rng(seed + epoch if seed is not None else epoch)
+                r = ms_random.default_rng(seed + epoch if seed is not None else epoch)
                 r.shuffle(indices)
             if self.drop_remainder:
                 indices = indices[:global_per_epoch]
@@ -558,12 +566,11 @@ class IndexSampler:
         """Get metadata for a record by index."""
         if idx < 0 or idx not in self._global_to_key:
             raise IndexError()
-        import numpy as np
 
         return RecordMetadata(
             index=idx,
             record_key=self._global_to_key[idx],
-            rng=np.random.default_rng(idx),
+            rng=ms_random.default_rng(idx),
         )
 
     def __iter__(self) -> Iterator[int]:
@@ -646,13 +653,12 @@ class RandomMapOperation:
 
     def __call__(self, iterator: Iterable[Optional[Record]]) -> Iterator[Record]:
         """Apply the operation to an iterator."""
-        import numpy as np
 
         for record in iterator:
             if record is not None and record.metadata is not None:
                 rng = getattr(record.metadata, "rng", None)
                 if rng is None:
-                    rng = np.random.default_rng(record.metadata.index)
+                    rng = ms_random.default_rng(record.metadata.index)
                 yield Record(
                     metadata=record.metadata.remove_record_key(),
                     data=self.random_map(record.data, rng),
@@ -716,7 +722,6 @@ class CopyNumPyArrayToSharedMemoryOperation:
 
     def map(self, data: Any) -> Any:
         """Map data by copying it to shared memory if applicable."""
-        import numpy as np
 
         if isinstance(data, list):
             return [SharedMemoryArrayMetadata() for _ in data]
@@ -726,7 +731,7 @@ class CopyNumPyArrayToSharedMemoryOperation:
             data.flags, "c_contiguous", False
         ):
             return data
-        if not isinstance(data, np.ndarray):
+        if not isinstance(data, Tensor) and not hasattr(data, "dtype"):
             return data
         return SharedMemoryArrayMetadata()
 
@@ -773,23 +778,21 @@ def fake_class(*args: Any, **kwargs: Any) -> type:
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             """Initialize the fake class."""
-            pass
 
     return Fake
 
 
 def batch_and_pad(elements: List[Any], batch_size: int) -> Any:
     """Batch and pad elements to a given size."""
-    import numpy as np
 
     pad_len = batch_size - len(elements)
     if pad_len > 0:
-        if isinstance(elements[0], np.ndarray):
-            pad = [np.zeros_like(elements[0])] * pad_len
+        if isinstance(elements[0], Tensor) or hasattr(elements[0], "dtype"):
+            pad = [ms_ops.zeros_like(elements[0])] * pad_len
             elements.extend(pad)
         else:
             elements.extend([0] * pad_len)
-    return np.array(elements)
+    return ms_ops.array(elements)
 
 
 class SharedMemoryDataSource:
@@ -812,11 +815,11 @@ class SharedMemoryDataSource:
 
     def close(self) -> None:
         """Close the data source."""
-        pass
+        return
 
     def unlink(self) -> None:
         """Unlink the data source."""
-        pass
+        return
 
     def __str__(self) -> str:
         """Return a string representation of the data source."""
@@ -826,8 +829,6 @@ class SharedMemoryDataSource:
 class SharedMemoryArrayMetadata:
     """Metadata for a shared memory array."""
 
-    pass
-
 
 class shared_memory_array:
     """Namespace for shared memory array utilities."""
@@ -835,19 +836,12 @@ class shared_memory_array:
     SharedMemoryArrayMetadata = SharedMemoryArrayMetadata
 
 
-Batch = BatchOperation
-
-
 class DatasetIterator:
     """An iterator for a Dataset."""
-
-    pass
 
 
 class DatasetSelectionMap:
     """A mapping for dataset selection."""
-
-    pass
 
 
 FilterTransform = FilterOperation
@@ -860,8 +854,6 @@ Operation = MapOperation
 class PyGrainDatasetIterator:
     """An iterator for PyGrain dataset."""
 
-    pass
-
 
 RandomMapTransform = RandomMapOperation
 Sampler = SequentialSampler
@@ -869,8 +861,6 @@ Sampler = SequentialSampler
 
 class SharedMemoryArray:
     """A shared memory array."""
-
-    pass
 
 
 CopyNumPyArrayToSharedMemory = CopyNumPyArrayToSharedMemoryOperation
@@ -966,7 +956,7 @@ class Dataset(Generic[_T]):
             src = RangeDataSource(args[0], args[1], 1)
         else:
             src = RangeDataSource(args[0], args[1], args[2])
-        return cls(source=src)
+        return Dataset(source=src)
 
     def __len__(self) -> int:
         """Return the length of the dataset."""
@@ -982,19 +972,13 @@ class Dataset(Generic[_T]):
 class MapDataset(Dataset[_T]):
     """A mapped dataset."""
 
-    pass
-
 
 class FilterDataset(Dataset[_T]):
     """A filtered dataset."""
 
-    pass
-
 
 class BatchDataset(Dataset[_T]):
     """A batched dataset."""
-
-    pass
 
 
 class IterDataset(Generic[_T]):
@@ -1033,4 +1017,4 @@ def apply_transformations(ds: Dataset[_T], transform: Any) -> Dataset[_T]:
 
 def get_element_spec(ds: Dataset[_T]) -> Any:
     """Get the element spec of a dataset."""
-    pass
+    return None

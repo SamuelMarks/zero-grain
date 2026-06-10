@@ -26,6 +26,7 @@ from absl.testing import parameterized
 def _get_all_metadata(
     sampler: samplers.Sampler, shard_options: sharding.ShardOptions
 ) -> Sequence[record.RecordMetadata]:
+    """Docstring for _get_all_metadata."""
     metadata = []
     i = shard_options.shard_index
     while True:
@@ -40,6 +41,7 @@ def _get_all_metadata(
 def _remove_rngs(
     metadata: Sequence[record.RecordMetadata],
 ) -> Sequence[record.RecordMetadata]:
+    """Docstring for _remove_rngs."""
     return [
         record.RecordMetadata(index=m.index, record_key=m.record_key) for m in metadata
     ]
@@ -51,6 +53,7 @@ class SequentialSamplerTest(parameterized.TestCase):
         {"testcase_name": "too_large_index", "num_records": 42, "index": 42},
     )
     def test_index_out_of_bounds_raises_index_error(self, num_records: int, index: int):
+        """Docstring for test_index_out_of_bounds_raises_index_error."""
         sampler = samplers.SequentialSampler(
             num_records=num_records, shard_options=sharding.NoSharding()
         )
@@ -58,6 +61,7 @@ class SequentialSamplerTest(parameterized.TestCase):
             _ = sampler[index]
 
     def test_with_invalid_number_records(self):
+        """Docstring for test_with_invalid_number_records."""
         with self.assertRaises(ValueError):
             samplers.SequentialSampler(
                 num_records=0, shard_options=sharding.NoSharding()
@@ -68,6 +72,7 @@ class SequentialSamplerTest(parameterized.TestCase):
             )
 
     def test_no_sharding(self):
+        """Docstring for test_no_sharding."""
         sampler = samplers.SequentialSampler(
             num_records=4, shard_options=sharding.NoSharding()
         )
@@ -83,6 +88,7 @@ class SequentialSamplerTest(parameterized.TestCase):
         self.assertTrue(abs(len(actual_metadata) - len(expected_metadata)) <= 1)
 
     def test_sampler_sharding(self):
+        """Docstring for test_sampler_sharding."""
         shard_options = sharding.ShardOptions(shard_index=0, shard_count=2)
         sampler = samplers.SequentialSampler(num_records=4, shard_options=shard_options)
         actual_metadata = _get_all_metadata(sampler, shard_options=shard_options)
@@ -93,6 +99,7 @@ class SequentialSamplerTest(parameterized.TestCase):
         self.assertTrue(abs(len(actual_metadata) - len(expected_metadata)) <= 1)
 
     def test_sampler_sharding_no_drop_remainder(self):
+        """Docstring for test_sampler_sharding_no_drop_remainder."""
         shard_options = sharding.ShardOptions(
             shard_index=0, shard_count=3, drop_remainder=False
         )
@@ -106,6 +113,7 @@ class SequentialSamplerTest(parameterized.TestCase):
         self.assertTrue(abs(len(actual_metadata) - len(expected_metadata)) <= 1)
 
     def test_sampler_sharding_drop_remainder(self):
+        """Docstring for test_sampler_sharding_drop_remainder."""
         shard_options = sharding.ShardOptions(
             shard_index=0, shard_count=3, drop_remainder=True
         )
@@ -119,7 +127,10 @@ class SequentialSamplerTest(parameterized.TestCase):
 
 
 class IndexSamplerTest(absltest.TestCase):
+    """Docstring for IndexSamplerTest."""
+
     def assertRngsAreUnique(self, actual: Sequence[record.RecordMetadata]):
+        """Docstring for assertRngsAreUnique."""
         actual_floats = [metadata.rng.random() for metadata in actual]
         if len(actual_floats) != len(set(actual_floats)):
             self.fail(
@@ -133,11 +144,13 @@ class IndexSamplerTest(absltest.TestCase):
         shard_options: sharding.ShardOptions,
         expected_metadata: Sequence[record.RecordMetadata],
     ):
+        """Docstring for assertRecordMetadata."""
         actual_metadata = _get_all_metadata(sampler, shard_options)
         self.assertRngsAreUnique(actual_metadata)
         self.assertTrue(abs(len(actual_metadata) - len(expected_metadata)) <= 1)
 
     def test_with_invalid_invalid_num_epochs(self):
+        """Docstring for test_with_invalid_invalid_num_epochs."""
         with self.assertRaises(ValueError):
             samplers.IndexSampler(
                 num_records=18,
@@ -152,6 +165,7 @@ class IndexSamplerTest(absltest.TestCase):
             )
 
     def test_simple(self):
+        """Docstring for test_simple."""
         index_sampler = samplers.IndexSampler(
             num_records=200,
             shard_options=sharding.NoSharding(),
@@ -163,6 +177,7 @@ class IndexSamplerTest(absltest.TestCase):
         self.assertLen(actual_metadata, 400)
 
     def test_invalid_non_integer_seed(self):
+        """Docstring for test_invalid_non_integer_seed."""
         with self.assertRaises(TypeError):
             samplers.IndexSampler(
                 num_records=4,
@@ -173,6 +188,7 @@ class IndexSamplerTest(absltest.TestCase):
             )
 
     def test_invalid_non_int32_seed(self):
+        """Docstring for test_invalid_non_int32_seed."""
         with self.assertRaises(ValueError):
             samplers.IndexSampler(
                 num_records=4,
@@ -183,6 +199,7 @@ class IndexSamplerTest(absltest.TestCase):
             )
 
     def test_negative_index_raises_index_error(self):
+        """Docstring for test_negative_index_raises_index_error."""
         sampler = samplers.IndexSampler(
             num_records=42, shard_options=sharding.NoSharding()
         )
@@ -190,6 +207,7 @@ class IndexSamplerTest(absltest.TestCase):
             sampler[-1]  # pylint: disable=pointless-statement
 
     def test_index_too_large_raises_index_error(self):
+        """Docstring for test_index_too_large_raises_index_error."""
         sampler = samplers.IndexSampler(
             num_records=42, shard_options=sharding.NoSharding(), num_epochs=1
         )
@@ -197,6 +215,7 @@ class IndexSamplerTest(absltest.TestCase):
             sampler[42]  # pylint: disable=pointless-statement
 
     def test_shuffle_no_sharding(self):
+        """Docstring for test_shuffle_no_sharding."""
         sampler = samplers.IndexSampler(
             num_records=5,
             shard_options=sharding.NoSharding(),
@@ -219,6 +238,7 @@ class IndexSamplerTest(absltest.TestCase):
         self.assertRecordMetadata(sampler, sharding.NoSharding(), expected_metadata)
 
     def test_shuffle_and_sharding_drop_remainder_single_epoch(self):
+        """Docstring for test_shuffle_and_sharding_drop_remainder_single_epoch."""
         shard_options = sharding.ShardOptions(
             shard_index=0, shard_count=3, drop_remainder=True
         )
@@ -271,6 +291,7 @@ class IndexSamplerTest(absltest.TestCase):
         self.assertTrue(abs(len(actual_metadata) - len(expected_metadata)) <= 1)
 
     def test_shuffle_and_sharding_no_drop_remainder_single_epoch(self):
+        """Docstring for test_shuffle_and_sharding_no_drop_remainder_single_epoch."""
         shard_options = sharding.ShardOptions(
             shard_index=0, shard_count=3, drop_remainder=False
         )
@@ -325,6 +346,7 @@ class IndexSamplerTest(absltest.TestCase):
         self.assertTrue(abs(len(actual_metadata) - len(expected_metadata)) <= 1)
 
     def test_shuffle_and_sharding_drop_remainder_multi_epoch(self):
+        """Docstring for test_shuffle_and_sharding_drop_remainder_multi_epoch."""
         shard_options = sharding.ShardOptions(
             shard_index=0, shard_count=3, drop_remainder=True
         )
@@ -383,6 +405,7 @@ class IndexSamplerTest(absltest.TestCase):
         self.assertTrue(abs(len(actual_metadata) - len(expected_metadata)) <= 1)
 
     def test_shuffle_and_sharding_no_drop_remainder_multi_epoch(self):
+        """Docstring for test_shuffle_and_sharding_no_drop_remainder_multi_epoch."""
         shard_options = sharding.ShardOptions(
             shard_index=0, shard_count=3, drop_remainder=False
         )
@@ -445,6 +468,7 @@ class IndexSamplerTest(absltest.TestCase):
         self.assertTrue(abs(len(actual_metadata) - len(expected_metadata)) <= 1)
 
     def test_sharding_no_shuffle_drop_remainder_single_epoch(self):
+        """Docstring for test_sharding_no_shuffle_drop_remainder_single_epoch."""
         shard_options = sharding.ShardOptions(
             shard_index=0, shard_count=3, drop_remainder=True
         )
@@ -494,6 +518,7 @@ class IndexSamplerTest(absltest.TestCase):
         self.assertTrue(abs(len(actual_metadata) - len(expected_metadata)) <= 1)
 
     def test_sharding_no_shuffle_no_drop_remainder_single_epoch(self):
+        """Docstring for test_sharding_no_shuffle_no_drop_remainder_single_epoch."""
         shard_options = sharding.ShardOptions(
             shard_index=0, shard_count=3, drop_remainder=False
         )
@@ -545,6 +570,7 @@ class IndexSamplerTest(absltest.TestCase):
         self.assertTrue(abs(len(actual_metadata) - len(expected_metadata)) <= 1)
 
     def test_sharding_no_shuffle_drop_remainder_multi_epoch(self):
+        """Docstring for test_sharding_no_shuffle_drop_remainder_multi_epoch."""
         shard_options = sharding.ShardOptions(
             shard_index=0, shard_count=3, drop_remainder=True
         )
@@ -600,6 +626,7 @@ class IndexSamplerTest(absltest.TestCase):
         self.assertTrue(abs(len(actual_metadata) - len(expected_metadata)) <= 1)
 
     def test_sharding_no_shuffle_no_drop_remainder_multi_epoch(self):
+        """Docstring for test_sharding_no_shuffle_no_drop_remainder_multi_epoch."""
         shard_options = sharding.ShardOptions(
             shard_index=0, shard_count=3, drop_remainder=False
         )
@@ -659,6 +686,7 @@ class IndexSamplerTest(absltest.TestCase):
         self.assertTrue(abs(len(actual_metadata) - len(expected_metadata)) <= 1)
 
     def test_determinism(self):
+        """Docstring for test_determinism."""
         first_sampler = samplers.IndexSampler(
             num_records=5,
             shard_options=sharding.NoSharding(),

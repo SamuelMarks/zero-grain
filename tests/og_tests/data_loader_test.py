@@ -1,3 +1,5 @@
+"""Module docstring."""
+
 from __future__ import annotations
 
 # Copyright 2023 Google LLC
@@ -57,6 +59,7 @@ def setup_module():
     # When run via bazel, FLAGS.test_srcdir is set from the
     # BUILD file, see args = ["--test_srcdir=grain/_src/python"]
     # in grain/_src/python/BUILD
+    """Docstring for setup_module."""
     from zero_grain import python as grain  # pylint: disable=g-import-not-at-top
 
     srcdir = pathlib.Path(grain.__file__).parents[0] / "_src" / "python"
@@ -64,78 +67,113 @@ def setup_module():
 
 
 def map_function(data):
+    """Docstring for map_function."""
     return data + 1
 
 
 def condition_function(data):
+    """Docstring for condition_function."""
     return data % 2 == 0
 
 
 class FilterEven(transforms.Filter):
+    """Docstring for FilterEven."""
+
     def filter(self, x: int) -> bool:
+        """Docstring for filter."""
         return x % 2 == 0
 
 
 class PlusOne(transforms.Map):
+    """Docstring for PlusOne."""
+
     def map(self, x: int) -> int:
+        """Docstring for map."""
         return x + 1
 
 
 class PlusRandom(transforms.RandomMap):
+    """Docstring for PlusRandom."""
+
     def random_map(self, x: int, rng: np.random.Generator) -> int:
+        """Docstring for random_map."""
         return x + rng.integers(100_000)
 
 
 class FailingMap(transforms.Map):
+    """Docstring for FailingMap."""
+
     def map(self, x):
+        """Docstring for map."""
         del x
         1 / 0  # pylint: disable=pointless-statement
 
 
 class NonPickableTransform(transforms.Map):
+    """Docstring for NonPickableTransform."""
+
     def __getstate__(self):
+        """Docstring for __getstate__."""
         raise ValueError("I shall not be pickled")
 
     def map(self, x):
+        """Docstring for map."""
         return x
 
 
 class RaisingTransform(transforms.Map):
+    """Docstring for RaisingTransform."""
+
     def map(self, x):
+        """Docstring for map."""
         raise AttributeError("I shall raise")
 
 
 class ExitingTransform(transforms.Map):
+    """Docstring for ExitingTransform."""
+
     def map(self, x):
+        """Docstring for map."""
         raise sys.exit(123)
 
 
 class RandomTripletSource:
+    """Docstring for RandomTripletSource."""
+
     def __len__(self) -> int:
+        """Docstring for __len__."""
         return 100_000
 
     def __getitem__(self, record_key: int):
+        """Docstring for __getitem__."""
         return {
             "data": np.random.uniform(size=(3, 224, 224, 3)).astype(dtype=np.float32)
         }
 
 
 class DuplicateElementFlatMap(transforms.FlatMap):
+    """Docstring for DuplicateElementFlatMap."""
+
     max_fan_out: int = 7
 
     def flat_map(self, element: Any) -> Any:
+        """Docstring for flat_map."""
         for _ in range(self.max_fan_out):
             yield element
 
 
 class CopyNumPyArrayToSharedMemoryTest(absltest.TestCase):
+    """Docstring for CopyNumPyArrayToSharedMemoryTest."""
+
     def test_copy_numpy_array_to_shared_memory(self):
+        """Docstring for test_copy_numpy_array_to_shared_memory."""
         element = np.array([1, 2, 3, 4, 5, 6, 7])
         transform = data_loader_lib.CopyNumPyArrayToSharedMemory()
         result = transform.map(element)
         self.assertIsInstance(result, shared_memory_array.SharedMemoryArrayMetadata)
 
     def test_copy_nested_numpy_array_to_shared_memory(self):
+        """Docstring for test_copy_nested_numpy_array_to_shared_memory."""
         element_1 = np.arange(5)
         element_2 = np.arange(5)
         transform = data_loader_lib.CopyNumPyArrayToSharedMemory()
@@ -144,13 +182,18 @@ class CopyNumPyArrayToSharedMemoryTest(absltest.TestCase):
         self.assertIsInstance(result[1], shared_memory_array.SharedMemoryArrayMetadata)
 
     def test_copy_skipped_non_numpy_array(self):
+        """Docstring for test_copy_skipped_non_numpy_array."""
         element = "randomstring"
         transform = data_loader_lib.CopyNumPyArrayToSharedMemory()
         result = transform.map(element)
         self.assertIs(result, element)
 
     def test_copy_skipped_dtype_hasobject(self):
+        """Docstring for test_copy_skipped_dtype_hasobject."""
+
         class DT:
+            """Docstring for DT."""
+
             pass
 
         element = np.array([127, 128, 129], dtype=np.dtype(DT))
@@ -160,6 +203,7 @@ class CopyNumPyArrayToSharedMemoryTest(absltest.TestCase):
         self.assertIs(result, element)
 
     def test_copy_skipped_flags_c_contiguous(self):
+        """Docstring for test_copy_skipped_flags_c_contiguous."""
         element = np.arange(9).reshape(3, 3)[:, (0, 1)]
         transform = data_loader_lib.CopyNumPyArrayToSharedMemory()
         result = transform.map(element)
@@ -175,13 +219,17 @@ class CopyNumPyArrayToSharedMemoryTest(absltest.TestCase):
     ]
 )
 class DataLoaderTest(absl_parameterized.TestCase):
+    """Docstring for DataLoaderTest."""
+
     def tearDown(self):
+        """Docstring for tearDown."""
         super().tearDown()
 
     # Number of prefetch threads for each Grain worker
     num_threads_per_worker: int | None
 
     def setUp(self):
+        """Docstring for setUp."""
         super().setUp()
         self.testdata_dir = pathlib.Path(FLAGS.test_srcdir) / "testdata"
         self.read_options = (
@@ -198,6 +246,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         seed: Union[int, None] = None,
     ) -> data_loader_lib.DataLoader:
         # Generates elements [0, 1, 2, 3, 4, 5, 6, 7].
+        """Docstring for _create_data_loader_for_short_sequence."""
         range_data_source = RangeDataSource(start=0, stop=8, step=1)
         sampler = samplers.SequentialSampler(
             num_records=len(range_data_source),
@@ -213,6 +262,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         )
 
     def test_fails_to_pickle(self):
+        """Docstring for test_fails_to_pickle."""
         transformations = [NonPickableTransform()]
         data_loader = self._create_data_loader_for_short_sequence(
             transformations, worker_count=2
@@ -221,6 +271,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
             list(data_loader)
 
     def test_propagates_transform_error_with_multiprocessing(self):
+        """Docstring for test_propagates_transform_error_with_multiprocessing."""
         transformations = [RaisingTransform()]
         data_loader = self._create_data_loader_for_short_sequence(
             transformations, worker_count=2
@@ -229,6 +280,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
             list(data_loader)
 
     def test_reports_multiprocessing_worker_crash(self):
+        """Docstring for test_reports_multiprocessing_worker_crash."""
         transformations = [ExitingTransform()]
         data_loader = self._create_data_loader_for_short_sequence(
             transformations, worker_count=2
@@ -244,6 +296,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         # Filter keeps only even elements [2, 4, 6, 8]
         # Batching batches each 2 consective elements, producing
         # [np.array([2, 4]), np.array([6, 8])]
+        """Docstring for test_data_loader_single_process."""
         transformations = [
             PlusOne(),
             FilterEven(),
@@ -255,6 +308,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         np.testing.assert_equal(actual, expected)
 
     def test_data_loader_single_process_random_map(self):
+        """Docstring for test_data_loader_single_process_random_map."""
         transformations = [
             PlusRandom(),
             BatchOperation(batch_size=2),
@@ -281,6 +335,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         np.testing.assert_equal(actual, expected)
 
     def test_data_loader_single_process_iterate_twice(self):
+        """Docstring for test_data_loader_single_process_iterate_twice."""
         transformations = [
             PlusOne(),
             FilterEven(),
@@ -296,6 +351,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         np.testing.assert_equal(actual, expected)
 
     def test_data_loader_in_memory_data_source(self):
+        """Docstring for test_data_loader_in_memory_data_source."""
         data_source = SharedMemoryDataSource([0, 1, 2, 3, 4, 5, 6, 7])
 
         sampler = samplers.SequentialSampler(
@@ -328,6 +384,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
 
     def test_data_loader_two_processes_no_shared_memory(self):
         # Generates elements [0, 1, 2, 3, 4, 5, 6, 7]
+        """Docstring for test_data_loader_two_processes_no_shared_memory."""
         range_data_source = RangeDataSource(start=0, stop=8, step=1)
 
         sampler = samplers.SequentialSampler(
@@ -360,6 +417,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
 
     def test_data_loader_two_processes_with_shared_memory(self):
         # Generates elements [0, 1, 2, 3, 4, 5, 6, 7]
+        """Docstring for test_data_loader_two_processes_with_shared_memory."""
         range_data_source = RangeDataSource(start=0, stop=8, step=1)
 
         sampler = samplers.SequentialSampler(
@@ -391,6 +449,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         np.testing.assert_equal(actual, expected)
 
     def test_data_loader_remote_exception(self):
+        """Docstring for test_data_loader_remote_exception."""
         range_data_source = RangeDataSource(start=0, stop=8, step=1)
 
         sampler = samplers.SequentialSampler(
@@ -416,6 +475,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
     def test_data_loader_with_used_array_record_data_source(
         self,
     ):
+        """Docstring for test_data_loader_with_used_array_record_data_source."""
         data_source = ArrayRecordDataSource(
             [
                 str(self.testdata_dir / "digits.array_record-00000-of-00002"),
@@ -555,6 +615,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         steps_to_iterate: int,
         expected: Sequence[np.ndarray],
     ):
+        """Docstring for test_data_loader_checkpointing_object_reconstruction."""
         data_loader_iterator = iter(self.create_checkpointing_dataloader(num_workers))
 
         # actual contains elements obtained by iterating through dataloader before
@@ -657,6 +718,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         steps_to_iterate: int,
         expected: Sequence[np.ndarray],
     ):
+        """Docstring for test_data_loader_checkpointing_same_object."""
         data_loader_iterator = iter(self.create_checkpointing_dataloader(num_workers))
 
         # actual contains elements obtained by iterating through dataloader before
@@ -679,6 +741,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         {"num_workers": 0}, {"num_workers": 1}, {"num_workers": 2}
     )
     def test_data_loader_sequential_checkpoint_restore_drift(self, num_workers: int):
+        """Docstring for test_data_loader_sequential_checkpoint_restore_drift."""
         data_loader_iterator = iter(
             self.create_checkpointing_dataloader(num_workers=num_workers)
         )
@@ -704,6 +767,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         # Filter keeps only even elements [2, 4, 6, 8]
         # Batching batches each 2 consective elements, producing
         # [np.array([2, 4]), np.array([6, 8])]
+        """Docstring for test_batch_transform_mapped_to_batch_operation."""
         transformations = [
             PlusOne(),
             FilterEven(),
@@ -719,6 +783,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         # Filter keeps only even elements [2, 4, 6, 8]
         # Batching batches each 3 consective elements with batch_and_pad fn,
         # producing [np.array([2, 4, 6]), np.array([8, 0, 0])]
+        """Docstring for test_data_loader_with_batch_fn."""
         transformations = [
             PlusOne(),
             FilterEven(),
@@ -733,6 +798,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         np.testing.assert_equal(actual, expected)
 
     def test_state_without_in_memory_data(self):
+        """Docstring for test_state_without_in_memory_data."""
         data_source = list(range(10000))
         loader = data_loader_lib.DataLoader(
             data_source=data_source,
@@ -744,6 +810,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         self.assertLess(len(state), 1000)
 
     def test_data_loader_with_flat_map(self):
+        """Docstring for test_data_loader_with_flat_map."""
         range_data_source = RangeDataSource(start=0, stop=8, step=1)
         sampler = samplers.SequentialSampler(
             num_records=len(range_data_source), shard_options=sharding.NoSharding()
@@ -764,6 +831,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
         )
 
     def test_data_loader_with_flat_map_checkpointing(self):
+        """Docstring for test_data_loader_with_flat_map_checkpointing."""
         range_data_source = RangeDataSource(start=0, stop=8, step=1)
         sampler = samplers.SequentialSampler(
             num_records=len(range_data_source), shard_options=sharding.NoSharding()
@@ -783,6 +851,7 @@ class DataLoaderTest(absl_parameterized.TestCase):
 
     @absl_parameterized.product(worker_count=[0, 4], num_start_prefetch_calls=[1, 5])
     def test_start_prefetch(self, worker_count: int, num_start_prefetch_calls: int):
+        """Docstring for test_start_prefetch."""
         range_data_source = RangeDataSource(start=0, stop=16, step=1)
         sampler = samplers.SequentialSampler(
             num_records=len(range_data_source), shard_options=sharding.NoSharding()
@@ -800,7 +869,10 @@ class DataLoaderTest(absl_parameterized.TestCase):
 
 
 class PyGrainDatasetIteratorTest(absltest.TestCase):
+    """Docstring for PyGrainDatasetIteratorTest."""
+
     def test_str(self):
+        """Docstring for test_str."""
         range_data_source = RangeDataSource(start=0, stop=8, step=1)
         sampler = samplers.SequentialSampler(
             num_records=len(range_data_source),

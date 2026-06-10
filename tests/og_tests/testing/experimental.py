@@ -1,3 +1,5 @@
+"""Module docstring."""
+
 from __future__ import annotations
 
 """API to test checkpointing."""
