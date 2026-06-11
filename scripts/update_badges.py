@@ -1,10 +1,21 @@
+"""Script to automatically update coverage badges in the README.md file."""
+
 import os
 import re
 import subprocess
 import json
 
 
-def get_color(pct):
+def get_color(pct: float) -> str:
+    """Get the color for a badge based on the coverage percentage.
+
+    Args:
+        pct: The coverage percentage.
+
+    Returns:
+        The color name to be used for the badge.
+
+    """
     if pct >= 100:
         return "brightgreen"
     if pct >= 90:
@@ -18,13 +29,28 @@ def get_color(pct):
     return "red"
 
 
-def format_cov(cov):
+def format_cov(cov: float) -> str:
+    """Format the coverage percentage to a string.
+
+    Args:
+        cov: The coverage percentage.
+
+    Returns:
+        The formatted coverage string.
+
+    """
     if int(cov) == cov:
         return str(int(cov))
     return f"{cov:.1f}"
 
 
-def get_test_coverage():
+def get_test_coverage() -> float:
+    """Run tests and retrieve the current test coverage percentage.
+
+    Returns:
+        The total test coverage percentage.
+
+    """
     try:
         env = os.environ.copy()
         env["PYTHONPATH"] = "src"
@@ -43,12 +69,19 @@ def get_test_coverage():
         return 0.0
 
 
-def get_doc_coverage():
+def get_doc_coverage() -> float:
+    """Retrieve the current documentation coverage percentage.
+
+    Returns:
+        The documentation coverage percentage.
+
+    """
     # Placeholder for actual AST linter coverage logic
     return 100.0
 
 
-def update_readme():
+def update_readme() -> None:
+    """Update the coverage badges in the project's README.md."""
     if not os.path.exists("README.md"):
         return
 

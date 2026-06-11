@@ -33,10 +33,10 @@ import numpy as np
 
 
 class OperationsTest(parameterized.TestCase):
-    """Docstring for OperationsTest."""
+    """Test class for operations."""
 
     def compare_output(self, actual, expected):
-        """Docstring for compare_output."""
+        """Compare the output."""
         self.assertEqual(len(actual), len(expected))
         for a, b in zip(actual, expected):
             a.metadata.rng = None
@@ -46,7 +46,7 @@ class OperationsTest(parameterized.TestCase):
             np.testing.assert_equal(dataclasses.astuple(a), dataclasses.astuple(b))
 
     def test_map_operation(self):
-        """Docstring for test_map_operation."""
+        """Test map operation."""
         map_operation = MapOperation(map_function=lambda data: data + 1)
         input_data = iter(
             [
@@ -67,7 +67,7 @@ class OperationsTest(parameterized.TestCase):
         self.compare_output(actual_output_data, expected_output_data)
 
     def test_random_map_operation(self):
-        """Docstring for test_random_map_operation."""
+        """Test random map operation."""
         delta = 0.1
         random_map_operation = RandomMapOperation(
             random_map_function=lambda data, rng: data + rng.uniform(-delta, delta)
@@ -93,13 +93,18 @@ class OperationsTest(parameterized.TestCase):
         )
 
     def test_map_operation_with_callable_objects(self):
-        """Docstring for test_map_operation_with_callable_objects."""
+        """Test map operation with callable objects."""
 
         class CallableObject:
-            """Docstring for CallableObject."""
+            """Callable object."""
 
             def __call__(self, x):
-                """Docstring for __call__."""
+                """Call the object.
+
+                Returns:
+                    The return value.
+
+                """
                 return x + 1
 
         map_operation = MapOperation(map_function=CallableObject())
@@ -114,7 +119,7 @@ class OperationsTest(parameterized.TestCase):
         self.compare_output(actual_output_data, expected_output_data)
 
     def test_filter_operation(self):
-        """Docstring for test_filter_operation."""
+        """Test filter operation."""
         filter_operation = FilterOperation(
             condition_function=lambda data: data % 2 == 0
         )
@@ -138,7 +143,7 @@ class OperationsTest(parameterized.TestCase):
     ############ BATCH TESTS ############
 
     def test_batch_integer_scalars(self):
-        """Docstring for test_batch_integer_scalars."""
+        """Test batch integer scalars."""
         input_data = iter(
             [
                 record.Record(record.RecordMetadata(index=0, record_key=3), 1),
@@ -160,7 +165,7 @@ class OperationsTest(parameterized.TestCase):
         self.compare_output(actual_output_data, expected_output_data)
 
     def test_batch_with_remainder(self):
-        """Docstring for test_batch_with_remainder."""
+        """Test batch with remainder."""
         input_data = iter(
             [
                 record.Record(record.RecordMetadata(index=0, record_key=4), 1),
@@ -186,7 +191,7 @@ class OperationsTest(parameterized.TestCase):
         self.compare_output(actual_output_data, expected_output_data)
 
     def test_batch_drop_remainder(self):
-        """Docstring for test_batch_drop_remainder."""
+        """Test batch drop remainder."""
         input_data = iter(
             [
                 record.Record(record.RecordMetadata(index=0, record_key=4), 1),
@@ -209,7 +214,7 @@ class OperationsTest(parameterized.TestCase):
         self.compare_output(actual_output_data, expected_output_data)
 
     def test_batch_dict_of_numpy_arrays_no_shared_memory(self):
-        """Docstring for test_batch_dict_of_numpy_arrays_no_shared_memory."""
+        """Test batch dict of numpy arrays no shared memory."""
         input_data = iter(
             [
                 record.Record(
@@ -233,7 +238,7 @@ class OperationsTest(parameterized.TestCase):
         self.compare_output(actual_output_data, expected_output_data)
 
     def test_batch_tuples(self):
-        """Docstring for test_batch_tuples."""
+        """Test batch tuples."""
         input_data = iter(
             [
                 record.Record(
@@ -260,7 +265,7 @@ class OperationsTest(parameterized.TestCase):
         self.compare_output(actual_output_data, expected_output_data)
 
     def test_batch_named_tuples(self):
-        """Docstring for test_batch_named_tuples."""
+        """Test batch named tuples."""
         point = collections.namedtuple("point", "x y")
         input_data = iter(
             [
@@ -285,7 +290,7 @@ class OperationsTest(parameterized.TestCase):
         self.compare_output(actual_output_data, expected_output_data)
 
     def test_batch_lists(self):
-        """Docstring for test_batch_lists."""
+        """Test batch lists."""
         input_data = iter(
             [
                 record.Record(record.RecordMetadata(index=0, record_key=4), [1, 2]),
@@ -303,7 +308,7 @@ class OperationsTest(parameterized.TestCase):
         self.compare_output(actual_output_data, expected_output_data)
 
     def test_batch_mixed_scalar_numbers(self):
-        """Docstring for test_batch_mixed_scalar_numbers."""
+        """Test batch mixed scalar numbers."""
         input_data = iter(
             [
                 record.Record(record.RecordMetadata(index=0, record_key=4), 1),
@@ -333,7 +338,7 @@ class OperationsTest(parameterized.TestCase):
         self.compare_output(actual_output_data, expected_output_data)
 
     def test_batch_lists_different_length(self):
-        """Docstring for test_batch_lists_different_length."""
+        """Test batch lists different length."""
         input_data = iter(
             [
                 record.Record(record.RecordMetadata(index=0, record_key=4), [1, 2]),
@@ -352,7 +357,7 @@ class OperationsTest(parameterized.TestCase):
             list(batch_operation(input_data))
 
     def test_batch_dicts_different_keys(self):
-        """Docstring for test_batch_dicts_different_keys."""
+        """Test batch dicts different keys."""
         input_data = iter(
             [
                 record.Record(record.RecordMetadata(index=0, record_key=4), {"a": 1}),
@@ -371,11 +376,11 @@ class OperationsTest(parameterized.TestCase):
             list(batch_operation(input_data))
 
     def test_batch_unsupported_type(self):
-        """Docstring for test_batch_unsupported_type."""
+        """Test batch unsupported type."""
 
         @dataclasses.dataclass
         class UnSupportedType:
-            """Docstring for UnSupportedType."""
+            """Un supported type."""
 
             some_value: int
 
@@ -400,7 +405,7 @@ class OperationsTest(parameterized.TestCase):
         self.compare_output(actual_output_data, expected_output_data)
 
     def test_batch_with_custom_batch_fn(self):
-        """Docstring for test_batch_with_custom_batch_fn."""
+        """Test batch with custom batch fn."""
         input_data = iter(
             [
                 record.Record(record.RecordMetadata(index=0, record_key=3), 1),

@@ -14,15 +14,15 @@ import numpy as np
 def assert_equal_output_after_checkpoint(
     ds: Any,
 ):
-    """Tests restoring an iterator to various checkpointed states.
+    """Test restoring an iterator to various checkpointed states.
 
     Args:
       ds: The dataset to test.  It is recommended to use a small dataset,
         potentially created using `grain.python.experimental.LimitIterDataset`, to
         restrict the number of steps being tested. The underlying dataset iterator
         must implement `get_state` and `set_state` for checkpointing.
-    """
 
+    """
     iterator = ds.__iter__()
     checkpoints = []
     expected_values = []

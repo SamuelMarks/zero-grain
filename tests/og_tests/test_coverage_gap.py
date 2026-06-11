@@ -40,7 +40,7 @@ from zero_grain.python import (
 
 
 def test_record_metadata_eq():
-    """Docstring for test_record_metadata_eq."""
+    """Test record metadata eq."""
     meta = RecordMetadata(index=1, record_key=2)
     assert meta != "not_a_meta"
     assert meta == RecordMetadata(index=1, record_key=2)
@@ -48,7 +48,7 @@ def test_record_metadata_eq():
 
 
 def test_batch_elements_tuple_with_fields():
-    """Docstring for test_batch_elements_tuple_with_fields."""
+    """Test batch elements tuple with fields."""
     from collections import namedtuple
 
     Point = namedtuple("Point", ["x", "y"])
@@ -59,34 +59,39 @@ def test_batch_elements_tuple_with_fields():
 
 
 def test_batch_elements_mismatched_tuples():
-    """Docstring for test_batch_elements_mismatched_tuples."""
+    """Test batch elements mismatched tuples."""
     batch = [(1, 2), (1, 2, 3)]
     with pytest.raises(TypeError):
         _batch_elements(batch)
 
 
 def test_batch_elements_lists():
-    """Docstring for test_batch_elements_lists."""
+    """Test batch elements lists."""
     batch = [[1, 2], [3, 4]]
     res = _batch_elements(batch)
     assert isinstance(res, Tensor)
 
 
 def test_batch_elements_tuple_ndarray():
-    """Docstring for test_batch_elements_tuple_ndarray."""
+    """Test batch elements tuple ndarray."""
     batch = [(np.array([1]), 2), (np.array([3]), 4)]
     res = _batch_elements(batch)
     assert isinstance(res, tuple)
 
 
 def test_batch_elements_except():
-    """Docstring for test_batch_elements_except."""
+    """Test batch elements except."""
 
     class Weird:
-        """Docstring for Weird."""
+        """Weird."""
 
         def __array__(self):
-            """Docstring for __array__."""
+            """Convert to a numpy array.
+
+            Raises:
+                ValueError: An error occurred.
+
+            """
             raise ValueError()
 
     batch = [Weird(), Weird()]
@@ -95,7 +100,7 @@ def test_batch_elements_except():
 
 
 def test_data_loader_iterator_prefetch_state():
-    """Docstring for test_data_loader_iterator_prefetch_state."""
+    """Test data loader iterator prefetch state."""
     dl = DataLoader(data_source=[1, 2, 3], sampler=[0, 1, 2], worker_count=3)
     it = iter(dl)
     it.start_prefetch()
@@ -115,7 +120,7 @@ def test_data_loader_iterator_prefetch_state():
 
 
 def test_checkpoint_handler():
-    """Docstring for test_checkpoint_handler."""
+    """Test checkpoint handler."""
     assert_equal_output_after_checkpoint(None)
     handler = PyGrainCheckpointHandler()
     handler.save()
@@ -123,7 +128,7 @@ def test_checkpoint_handler():
 
 
 def test_datasources_misc():
-    """Docstring for test_datasources_misc."""
+    """Test datasources misc."""
     ds = RandomAccessDataSource()
     assert len(ds) == 1
 
@@ -144,7 +149,7 @@ def test_datasources_misc():
 
 
 def test_sharding_misc():
-    """Docstring for test_sharding_misc."""
+    """Test sharding misc."""
     shard = ShardByJaxProcess(drop_remainder=True)
     assert shard.shard_index == 0
     assert shard.shard_count == 1
@@ -152,12 +157,12 @@ def test_sharding_misc():
 
 
 def test_options_misc():
-    """Docstring for test_options_misc."""
+    """Test options misc."""
     MultiprocessingOptions(num_workers=1)
 
 
 def test_index_sampler_seed_type():
-    """Docstring for test_index_sampler_seed_type."""
+    """Test index sampler seed type."""
     with pytest.raises(TypeError):
         IndexSampler(10, seed="not_an_int")
     with pytest.raises(ValueError):
@@ -170,7 +175,7 @@ def test_index_sampler_seed_type():
 
 
 def test_operations_not_implemented():
-    """Docstring for test_operations_not_implemented."""
+    """Test operations not implemented."""
     op_map_index = MapWithIndexOperation()
     with pytest.raises(NotImplementedError):
         op_map_index.map_with_index(0, 1)
@@ -193,7 +198,7 @@ def test_operations_not_implemented():
 
 
 def test_operations_implemented():
-    """Docstring for test_operations_implemented."""
+    """Test operations implemented."""
     op_map_idx = MapWithIndexOperation(lambda i, x: x)
     assert op_map_idx.map_with_index(0, 1) == 1
     rec = Record(RecordMetadata(0, 0), 1)
@@ -207,22 +212,25 @@ def test_operations_implemented():
 
 
 def test_fake_class():
-    """Docstring for test_fake_class."""
+    """Test fake class."""
     cls = fake_class()
     cls()
 
 
 def test_batch_and_pad():
-    """Docstring for test_batch_and_pad."""
+    """Test batch and pad."""
     res = batch_and_pad([np.array([1]), np.array([2])], batch_size=3)
     assert len(res) == 3
 
     res2 = batch_and_pad([1, 2], batch_size=3)
     assert len(res2) == 3
 
+    res3 = batch_and_pad([_batch_elements([1]), _batch_elements([2])], batch_size=3)
+    assert len(res3) == 3
+
 
 def test_dataset_misc():
-    """Docstring for test_dataset_misc."""
+    """Test dataset misc."""
     ds = Dataset([1, 2, 3])
     ds2 = ds.seed(42)
     assert ds2._seed == 42
@@ -262,13 +270,13 @@ def test_dataset_misc():
 
 
 def test_no_sharding_repr():
-    """Docstring for test_no_sharding_repr."""
+    """Test no sharding repr."""
     ns = NoSharding(1, 2, True)
     assert repr(ns) == "NoSharding(shard_index=1, shard_count=2, drop_remainder=True)"
 
 
 def test_seq_sampler_repr():
-    """Docstring for test_seq_sampler_repr."""
+    """Test seq sampler repr."""
     ss = SequentialSampler(10, NoSharding(0, 2, True))
     assert "SequentialSampler" in repr(ss)
     list(iter(ss))
@@ -277,7 +285,7 @@ def test_seq_sampler_repr():
 
 
 def test_misc_classes():
-    """Docstring for test_misc_classes."""
+    """Test misc classes."""
     DatasetSelectionMap()
     PyGrainDatasetIterator()
     dl = load([1, 2], batch_size=2)

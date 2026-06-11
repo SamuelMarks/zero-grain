@@ -2,3 +2,4 @@
 pytest
 absl-py
 parameterized
+numpy

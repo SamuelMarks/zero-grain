@@ -23,10 +23,10 @@ from absl.testing import absltest
 
 
 class RecordTest(absltest.TestCase):
-    """Docstring for RecordTest."""
+    """Test class for record."""
 
     def test_RecordMetadata_str(self):
-        """Docstring for test_RecordMetadata_str."""
+        """Test RecordMetadata str."""
         record_metadata = record.RecordMetadata(
             index=0, record_key=0, rng=np.random.default_rng()
         )
@@ -36,7 +36,7 @@ class RecordTest(absltest.TestCase):
         )
 
     def test_RecordMetadata_str_none_rng(self):
-        """Docstring for test_RecordMetadata_str_none_rng."""
+        """Test RecordMetadata str none rng."""
         record_metadata = record.RecordMetadata(index=0, record_key=0)
         self.assertStartsWith(
             str(record_metadata),

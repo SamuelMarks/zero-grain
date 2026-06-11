@@ -1,8 +1,16 @@
+"""Script to automatically add placeholder docstrings to Python files."""
+
 import ast
 import os
 
 
-def add_docstrings(filepath):
+def add_docstrings(filepath: str) -> None:
+    """Add placeholder docstrings to missing classes and functions in a file.
+
+    Args:
+        filepath: The path to the Python file to be modified.
+
+    """
     with open(filepath, "r") as f:
         source = f.read()
 
@@ -12,6 +20,15 @@ def add_docstrings(filepath):
     inserts = []
 
     def get_docstring(node):
+        """Retrieve docstring for an AST node.
+
+        Args:
+            node: The AST node to check.
+
+        Returns:
+            The docstring if it exists, None otherwise.
+
+        """
         return ast.get_docstring(node)
 
     if not get_docstring(tree):
@@ -34,12 +51,13 @@ def add_docstrings(filepath):
         f.write("\n".join(lines))
 
 
-for root, _, files in os.walk("src"):
-    for file in files:
-        if file.endswith(".py"):
-            add_docstrings(os.path.join(root, file))
+if __name__ == "__main__":
+    for root, _, files in os.walk("src"):
+        for file in files:
+            if file.endswith(".py"):
+                add_docstrings(os.path.join(root, file))
 
-for root, _, files in os.walk("tests"):
-    for file in files:
-        if file.endswith(".py"):
-            add_docstrings(os.path.join(root, file))
+    for root, _, files in os.walk("tests"):
+        for file in files:
+            if file.endswith(".py"):
+                add_docstrings(os.path.join(root, file))

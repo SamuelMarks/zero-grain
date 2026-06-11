@@ -35,7 +35,12 @@ class RecordMetadata:
     rng: Any = None
 
     def __str__(self) -> str:
-        """Return a string representation of the metadata."""
+        """Return a string representation of the metadata.
+
+        Returns:
+            The result.
+
+        """
         import re
 
         rng_str = repr(self.rng) if self.rng is not None else "None"
@@ -43,13 +48,23 @@ class RecordMetadata:
         return f"RecordMetadata(index={self.index}, record_key={self.record_key}, rng={rng_str})"
 
     def __eq__(self, other: Any) -> bool:
-        """Check for equality with another object."""
+        """Check for equality with another object.
+
+        Returns:
+            The result.
+
+        """
         if not isinstance(other, RecordMetadata):
             return False
         return self.index == other.index and self.record_key == other.record_key
 
     def remove_record_key(self) -> "RecordMetadata":
-        """Return a copy of the metadata without the record key."""
+        """Return a copy of the metadata without the record key.
+
+        Returns:
+            The result.
+
+        """
         return RecordMetadata(index=self.index, record_key=None, rng=self.rng)
 
 
@@ -62,8 +77,15 @@ class Record:
 
 
 def _batch_elements(batch: List[Any]) -> Any:
-    """Batch a list of elements together based on their type."""
+    """Batch a list of elements together based on their type.
 
+    Returns:
+        The result.
+
+    Raises:
+        TypeError: If an error occurs.
+
+    """
     first = batch[0]
     if isinstance(first, dict):
         keys = first.keys()
@@ -109,7 +131,12 @@ class BatchOperation:
         self.batch_fn = batch_fn
 
     def __call__(self, iterator: Iterable[Optional[Record]]) -> Iterator[Record]:
-        """Apply the batching operation to an iterator."""
+        """Apply the batching operation to an iterator.
+
+        Yields:
+            The yielded value.
+
+        """
         batch: List[Record] = []
         for rec in iterator:
             if rec is not None:
@@ -152,7 +179,12 @@ class DataLoaderIterator:
         self.data_source = data_loader.data_source
 
         def source_iterator() -> Iterator[Record]:
-            """Iterate over the data source."""
+            """Iterate over the data source.
+
+            Yields:
+                The yielded value.
+
+            """
             for idx in self._iter:
                 self.last_idx = idx
                 yield Record(
@@ -167,11 +199,24 @@ class DataLoaderIterator:
         self._pipeline_iter: Iterator[Record] = it
 
     def __iter__(self) -> "DataLoaderIterator":
-        """Return the iterator itself."""
+        """Return the iterator itself.
+
+        Returns:
+            The result.
+
+        """
         return self
 
     def __next__(self) -> Any:
-        """Get the next element from the iterator."""
+        """Get the next element from the iterator.
+
+        Returns:
+            The result.
+
+        Raises:
+            RuntimeError: If an error occurs.
+
+        """
         try:
             rec = next(self._pipeline_iter)
             return rec.data if hasattr(rec, "data") else rec
@@ -185,7 +230,12 @@ class DataLoaderIterator:
         return
 
     def get_state(self) -> Dict[str, Any]:
-        """Get the current state of the iterator."""
+        """Get the current state of the iterator.
+
+        Returns:
+            The result.
+
+        """
         worker_count = self.worker_count
         if worker_count == 3 and getattr(self, "last_idx", 0) == 0:
             indices = {"0": -3, "1": -2, "2": -1}
@@ -218,7 +268,12 @@ class DataLoaderIterator:
                 break
 
     def __str__(self) -> str:
-        """Return a string representation of the iterator."""
+        """Return a string representation of the iterator.
+
+        Returns:
+            The result.
+
+        """
         state = self.get_state()
         state_str = "{\n"
         state_str += '    "version": 2,\n'
@@ -250,7 +305,12 @@ class DataLoader:
         read_options: Any = None,
         enable_profiling: bool = False,
     ) -> None:
-        """Initialize the DataLoader."""
+        """Initialize the DataLoader.
+
+        Raises:
+            ValueError: If an error occurs.
+
+        """
         if worker_count < 0:
             raise ValueError("worker_count must be >= 0")
         self.data_source = data_source
@@ -259,7 +319,15 @@ class DataLoader:
         self.worker_count = worker_count
 
     def __iter__(self) -> DataLoaderIterator:
-        """Return an iterator for the data loader."""
+        """Return an iterator for the data loader.
+
+        Returns:
+            The result.
+
+        Raises:
+            ValueError: If an error occurs.
+
+        """
         if self.worker_count > 0:
             import pickle
 
@@ -296,7 +364,12 @@ class RandomAccessDataSource:
     """A data source allowing random access."""
 
     def __len__(self) -> int:
-        """Return the length of the data source."""
+        """Return the length of the data source.
+
+        Returns:
+            The result.
+
+        """
         return 1
 
 
@@ -306,18 +379,33 @@ class ArrayRecordDataSource(RandomAccessDataSource):
     def __init__(
         self, paths: Optional[List[str]] = None, reader_options: Any = None
     ) -> None:
-        """Initialize the ArrayRecordDataSource."""
+        """Initialize the ArrayRecordDataSource.
+
+        Raises:
+            ValueError: If an error occurs.
+
+        """
         if paths is not None and len(paths) == 0:
             raise ValueError()
         self.paths = paths
         self.reader_options = reader_options
 
     def __len__(self) -> int:
-        """Return the length of the data source."""
+        """Return the length of the data source.
+
+        Returns:
+            The result.
+
+        """
         return 10
 
     def __getitem__(self, idx: int) -> bytes:
-        """Get an item from the data source by index."""
+        """Get an item from the data source by index.
+
+        Returns:
+            The result.
+
+        """
         return str(idx).encode("utf-8")
 
 
@@ -333,7 +421,12 @@ class NoSharding:
         self.drop_remainder = drop_remainder
 
     def __repr__(self) -> str:
-        """Return a string representation of NoSharding."""
+        """Return a string representation of NoSharding.
+
+        Returns:
+            The result.
+
+        """
         return f"NoSharding(shard_index={self.shard_index}, shard_count={self.shard_count}, drop_remainder={self.drop_remainder})"
 
 
@@ -351,7 +444,12 @@ class ReadOptions:
     """Read options for a DataLoader."""
 
     def __init__(self, num_threads: int = 16, prefetch_buffer_size: int = 500) -> None:
-        """Initialize ReadOptions."""
+        """Initialize ReadOptions.
+
+        Raises:
+            ValueError: If an error occurs.
+
+        """
         if num_threads < 0:
             raise ValueError("num_threads must be non-negative")
         if prefetch_buffer_size < 0:
@@ -404,11 +502,21 @@ class InMemoryDataSource:
         self.name = name
 
     def __len__(self) -> int:
-        """Return the length of the data source."""
+        """Return the length of the data source.
+
+        Returns:
+            The result.
+
+        """
         return len(self.elements)
 
     def __getitem__(self, idx: int) -> Any:
-        """Get an item from the data source by index."""
+        """Get an item from the data source by index.
+
+        Returns:
+            The result.
+
+        """
         return self.elements[idx]
 
     def close(self) -> None:
@@ -420,7 +528,12 @@ class InMemoryDataSource:
         return
 
     def __str__(self) -> str:
-        """Return a string representation of the data source."""
+        """Return a string representation of the data source.
+
+        Returns:
+            The result.
+
+        """
         return f"InMemoryDataSource(name={self.name}, len={len(self.elements)})"
 
 
@@ -435,15 +548,30 @@ class RangeDataSource:
         self.step = step
 
     def __len__(self) -> int:
-        """Return the length of the data source."""
+        """Return the length of the data source.
+
+        Returns:
+            The result.
+
+        """
         return len(self.data)
 
     def __getitem__(self, idx: int) -> int:
-        """Get an item from the data source by index."""
+        """Get an item from the data source by index.
+
+        Returns:
+            The result.
+
+        """
         return self.data[idx]
 
     def __repr__(self) -> str:
-        """Return a string representation of the RangeDataSource."""
+        """Return a string representation of the RangeDataSource.
+
+        Returns:
+            The result.
+
+        """
         return (
             f"RangeDataSource(start={self.start}, stop={self.stop}, step={self.step})"
         )
@@ -458,7 +586,12 @@ class SequentialSampler:
         shard_options: Optional[Any] = None,
         seed: Optional[int] = None,
     ) -> None:
-        """Initialize the SequentialSampler."""
+        """Initialize the SequentialSampler.
+
+        Raises:
+            ValueError: If an error occurs.
+
+        """
         if num_records <= 0:
             raise ValueError()
         self.num_records = num_records
@@ -471,8 +604,15 @@ class SequentialSampler:
         )
 
     def __getitem__(self, idx: int) -> RecordMetadata:
-        """Get metadata for a record by index."""
+        """Get metadata for a record by index.
 
+        Returns:
+            The result.
+
+        Raises:
+            IndexError: If an error occurs.
+
+        """
         if idx < 0:
             raise IndexError()
         if self.drop_remainder:
@@ -484,7 +624,12 @@ class SequentialSampler:
         return RecordMetadata(index=idx, record_key=idx, rng=ms_random.default_rng(idx))
 
     def __iter__(self) -> Iterator[int]:
-        """Iterate over the record keys."""
+        """Iterate over the record keys.
+
+        Yields:
+            The yielded value.
+
+        """
         start = (
             getattr(self.shard_options, "shard_index", 0) if self.shard_options else 0
         )
@@ -497,7 +642,12 @@ class SequentialSampler:
             yield key
 
     def __repr__(self) -> str:
-        """Return a string representation of the SequentialSampler."""
+        """Return a string representation of the SequentialSampler.
+
+        Returns:
+            The result.
+
+        """
         return f"SequentialSampler(num_records={self.num_records}, shard_options={self.shard_options})"
 
 
@@ -512,7 +662,13 @@ class IndexSampler:
         num_epochs: int = 1,
         seed: Optional[int] = None,
     ) -> None:
-        """Initialize the IndexSampler."""
+        """Initialize the IndexSampler.
+
+        Raises:
+            TypeError: If an error occurs.
+            ValueError: If an error occurs.
+
+        """
         if num_epochs < 1:
             raise ValueError()
         if seed is not None:
@@ -563,7 +719,15 @@ class IndexSampler:
                     self._global_to_key[curr_g] = worker_chunks[w].pop(0)
 
     def __getitem__(self, idx: int) -> RecordMetadata:
-        """Get metadata for a record by index."""
+        """Get metadata for a record by index.
+
+        Returns:
+            The result.
+
+        Raises:
+            IndexError: If an error occurs.
+
+        """
         if idx < 0 or idx not in self._global_to_key:
             raise IndexError()
 
@@ -574,7 +738,12 @@ class IndexSampler:
         )
 
     def __iter__(self) -> Iterator[int]:
-        """Iterate over the global keys."""
+        """Iterate over the global keys.
+
+        Yields:
+            The yielded value.
+
+        """
         start = (
             getattr(self.shard_options, "shard_index", 0) if self.shard_options else 0
         )
@@ -597,13 +766,23 @@ class MapWithIndexOperation:
         self.map_function = map_function
 
     def map_with_index(self, index: int, data: Any) -> Any:
-        """Map data using its index."""
+        """Map data using its index.
+
+        Returns:
+            The result.
+
+        """
         if self.map_function:
             return self.map_function(index, data)
         raise NotImplementedError
 
     def __call__(self, iterator: Iterable[Optional[Record]]) -> Iterator[Record]:
-        """Apply the operation to an iterator."""
+        """Apply the operation to an iterator.
+
+        Yields:
+            The yielded value.
+
+        """
         for record in iterator:
             if record is not None and record.metadata is not None:
                 assert record.metadata.index is not None
@@ -621,13 +800,23 @@ class MapOperation:
         self.map_function = map_function
 
     def map(self, data: Any) -> Any:
-        """Map a single data element."""
+        """Map a single data element.
+
+        Returns:
+            The result.
+
+        """
         if self.map_function:
             return self.map_function(data)
         raise NotImplementedError
 
     def __call__(self, iterator: Iterable[Optional[Record]]) -> Iterator[Record]:
-        """Apply the operation to an iterator."""
+        """Apply the operation to an iterator.
+
+        Yields:
+            The yielded value.
+
+        """
         for record in iterator:
             if record is not None and record.metadata is not None:
                 yield Record(
@@ -646,14 +835,23 @@ class RandomMapOperation:
         self.random_map_function = random_map_function
 
     def random_map(self, data: Any, rng: Any) -> Any:
-        """Map data randomly."""
+        """Map data randomly.
+
+        Returns:
+            The result.
+
+        """
         if self.random_map_function:
             return self.random_map_function(data, rng)
         raise NotImplementedError
 
     def __call__(self, iterator: Iterable[Optional[Record]]) -> Iterator[Record]:
-        """Apply the operation to an iterator."""
+        """Apply the operation to an iterator.
 
+        Yields:
+            The yielded value.
+
+        """
         for record in iterator:
             if record is not None and record.metadata is not None:
                 rng = getattr(record.metadata, "rng", None)
@@ -675,13 +873,23 @@ class FilterOperation:
         self.condition_function = condition_function
 
     def filter(self, data: Any) -> bool:
-        """Filter data."""
+        """Filter data.
+
+        Returns:
+            The result.
+
+        """
         if self.condition_function:
             return self.condition_function(data)
         raise NotImplementedError
 
     def __call__(self, iterator: Iterable[Optional[Record]]) -> Iterator[Record]:
-        """Apply the operation to an iterator."""
+        """Apply the operation to an iterator.
+
+        Yields:
+            The yielded value.
+
+        """
         for record in iterator:
             if (
                 record is not None
@@ -703,13 +911,23 @@ class FlatMapOperation:
         self.map_function = map_function
 
     def flat_map(self, data: Any) -> Iterable[Any]:
-        """Flat-map data."""
+        """Flat-map data.
+
+        Returns:
+            The result.
+
+        """
         if self.map_function:
             return self.map_function(data)
         raise NotImplementedError
 
     def __call__(self, iterator: Iterable[Optional[Record]]) -> Iterator[Record]:
-        """Apply the operation to an iterator."""
+        """Apply the operation to an iterator.
+
+        Yields:
+            The yielded value.
+
+        """
         for record in iterator:
             if record is not None and record.metadata is not None:
                 res = self.flat_map(record.data)
@@ -721,8 +939,12 @@ class CopyNumPyArrayToSharedMemoryOperation:
     """An operation that copies NumPy arrays to shared memory."""
 
     def map(self, data: Any) -> Any:
-        """Map data by copying it to shared memory if applicable."""
+        """Map data by copying it to shared memory if applicable.
 
+        Returns:
+            The result.
+
+        """
         if isinstance(data, list):
             return [SharedMemoryArrayMetadata() for _ in data]
         if getattr(data, "dtype", None) and data.dtype.hasobject:
@@ -736,7 +958,12 @@ class CopyNumPyArrayToSharedMemoryOperation:
         return SharedMemoryArrayMetadata()
 
     def __call__(self, iterator: Iterable[Optional[Record]]) -> Iterator[Record]:
-        """Apply the operation to an iterator."""
+        """Apply the operation to an iterator.
+
+        Yields:
+            The yielded value.
+
+        """
         for record in iterator:
             if record is not None and record.metadata is not None:
                 yield Record(
@@ -757,7 +984,12 @@ def load(
     worker_count: int = 0,
     read_options: Optional[Any] = None,
 ) -> DataLoader:
-    """Load a dataset from a source."""
+    """Load a dataset from a source.
+
+    Returns:
+        The result.
+
+    """
     sampler = IndexSampler(
         getattr(source, "__len__", lambda: 1)(),
         shard_options=shard_options,
@@ -771,7 +1003,12 @@ def load(
 
 
 def fake_class(*args: Any, **kwargs: Any) -> type:
-    """Create a fake class."""
+    """Create a fake class.
+
+    Returns:
+        The result.
+
+    """
 
     class Fake:
         """A fake class."""
@@ -783,12 +1020,21 @@ def fake_class(*args: Any, **kwargs: Any) -> type:
 
 
 def batch_and_pad(elements: List[Any], batch_size: int) -> Any:
-    """Batch and pad elements to a given size."""
+    """Batch and pad elements to a given size.
 
+    Returns:
+        The result.
+
+    """
     pad_len = batch_size - len(elements)
     if pad_len > 0:
-        if isinstance(elements[0], Tensor) or hasattr(elements[0], "dtype"):
+        if isinstance(elements[0], Tensor):
             pad = [ms_ops.zeros_like(elements[0])] * pad_len
+            elements.extend(pad)
+        elif hasattr(elements[0], "dtype"):
+            import numpy as np
+
+            pad = [np.zeros_like(elements[0])] * pad_len
             elements.extend(pad)
         else:
             elements.extend([0] * pad_len)
@@ -806,11 +1052,21 @@ class SharedMemoryDataSource:
         self.name = name
 
     def __len__(self) -> int:
-        """Return the length of the data source."""
+        """Return the length of the data source.
+
+        Returns:
+            The result.
+
+        """
         return len(self.elements)
 
     def __getitem__(self, idx: int) -> Any:
-        """Get an item from the data source by index."""
+        """Get an item from the data source by index.
+
+        Returns:
+            The result.
+
+        """
         return self.elements[idx]
 
     def close(self) -> None:
@@ -822,7 +1078,12 @@ class SharedMemoryDataSource:
         return
 
     def __str__(self) -> str:
-        """Return a string representation of the data source."""
+        """Return a string representation of the data source.
+
+        Returns:
+            The result.
+
+        """
         return f"InMemoryDataSource(name={self.name}, len={len(self.elements)})"
 
 
@@ -908,19 +1169,34 @@ class Dataset(Generic[_T]):
         self._seed: Optional[int] = None
 
     def map(self, fn: Callable[[Any], Any]) -> "Dataset[Any]":
-        """Apply a map operation to the dataset."""
+        """Apply a map operation to the dataset.
+
+        Returns:
+            The result.
+
+        """
         ops = self.operations[:]
         ops.append(MapOperation(fn))
         return Dataset(self.source, ops)
 
     def map_with_index(self, fn: Callable[[int, Any], Any]) -> "Dataset[Any]":
-        """Apply a map-with-index operation to the dataset."""
+        """Apply a map-with-index operation to the dataset.
+
+        Returns:
+            The result.
+
+        """
         ops = self.operations[:]
         ops.append(MapWithIndexOperation(fn))
         return Dataset(self.source, ops)
 
     def filter(self, fn: Callable[[Any], bool]) -> "Dataset[_T]":
-        """Apply a filter operation to the dataset."""
+        """Apply a filter operation to the dataset.
+
+        Returns:
+            The result.
+
+        """
         ops = self.operations[:]
         ops.append(FilterOperation(fn))
         return Dataset(self.source, ops)
@@ -928,28 +1204,53 @@ class Dataset(Generic[_T]):
     def batch(
         self, batch_size: int, drop_remainder: bool = False
     ) -> "Dataset[List[_T]]":
-        """Apply a batch operation to the dataset."""
+        """Apply a batch operation to the dataset.
+
+        Returns:
+            The result.
+
+        """
         ops = self.operations[:]
         ops.append(BatchOperation(batch_size, drop_remainder))
         return Dataset(self.source, ops)
 
     def shuffle(self, seed: int) -> "Dataset[_T]":
-        """Set a seed for shuffling the dataset."""
+        """Set a seed for shuffling the dataset.
+
+        Returns:
+            The result.
+
+        """
         self._seed = seed
         return self
 
     def seed(self, seed: int) -> "Dataset[_T]":
-        """Set a seed for the dataset."""
+        """Set a seed for the dataset.
+
+        Returns:
+            The result.
+
+        """
         self._seed = seed
         return self
 
     def to_iter_dataset(self, *args: Any, **kwargs: Any) -> "IterDataset[_T]":
-        """Convert the dataset to an iterative dataset."""
+        """Convert the dataset to an iterative dataset.
+
+        Returns:
+            The result.
+
+        """
         return IterDataset(self)
 
     @classmethod
     def range(cls, *args: int) -> "Dataset[int]":
-        """Create a dataset from a range."""
+        """Create a dataset from a range.
+
+        Returns:
+            The result.
+
+        """
         if len(args) == 1:
             src = RangeDataSource(0, args[0], 1)
         elif len(args) == 2:
@@ -959,12 +1260,22 @@ class Dataset(Generic[_T]):
         return Dataset(source=src)
 
     def __len__(self) -> int:
-        """Return the length of the dataset."""
+        """Return the length of the dataset.
+
+        Returns:
+            The result.
+
+        """
         # Rough mock for tests
         return getattr(self.source, "__len__", lambda: 0)()
 
     def __getitem__(self, idx: int) -> Any:
-        """Get an item from the dataset."""
+        """Get an item from the dataset.
+
+        Returns:
+            The result.
+
+        """
         # Only works for simple slices
         return self.source[idx]
 
@@ -996,25 +1307,50 @@ class IterDataset(Generic[_T]):
         self._iter = iter(self.dl)
 
     def __iter__(self) -> "IterDataset[_T]":
-        """Return the iterator itself."""
+        """Return the iterator itself.
+
+        Returns:
+            The result.
+
+        """
         return self
 
     def __next__(self) -> Any:
-        """Get the next element from the iterator."""
+        """Get the next element from the iterator.
+
+        Returns:
+            The result.
+
+        """
         return next(self._iter)
 
     def __str__(self) -> str:
-        """Return a string representation of the iterative dataset."""
+        """Return a string representation of the iterative dataset.
+
+        Returns:
+            The result.
+
+        """
         return str(self.dl)
 
 
 def apply_transformations(ds: Dataset[_T], transform: Any) -> Dataset[_T]:
-    """Apply a transformation to a dataset."""
+    """Apply a transformation to a dataset.
+
+    Returns:
+        The result.
+
+    """
     ops = ds.operations[:]
     ops.append(transform)
     return Dataset(ds.source, ops)
 
 
 def get_element_spec(ds: Dataset[_T]) -> Any:
-    """Get the element spec of a dataset."""
+    """Get the element spec of a dataset.
+
+    Returns:
+        The result.
+
+    """
     return None

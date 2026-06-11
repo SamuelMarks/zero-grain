@@ -39,7 +39,7 @@ FLAGS = flags.FLAGS
 
 @dataclasses.dataclass
 class DummyFileInstruction:
-    """Docstring for DummyFileInstruction."""
+    """Dummy file instruction."""
 
     filename: str
     skip: int
@@ -48,15 +48,17 @@ class DummyFileInstruction:
 
 
 class DataSourceTest(parameterized.TestCase):
-    """Docstring for DataSourceTest."""
+    """Test class for data source."""
 
     def setUp(self):
-        """Docstring for setUp."""
+        """Set up the test environment."""
         super().setUp()
         self.testdata_dir = pathlib.Path(".")
 
 
 class RangeDataSourceTest(DataSourceTest):
+    """Test class."""
+
     @parameterized.parameters(
         [
             (0, 10, 2),  # Positive step
@@ -65,7 +67,7 @@ class RangeDataSourceTest(DataSourceTest):
         ]
     )
     def test_range_data_source(self, start, stop, step):
-        """Docstring for test_range_data_source."""
+        """Test range data source."""
         expected_output = list(range(start, stop, step))
 
         range_ds = data_sources.RangeDataSource(start, stop, step)
@@ -75,10 +77,10 @@ class RangeDataSourceTest(DataSourceTest):
 
 
 class InMemoryDataSourceTest(DataSourceTest):
-    """Docstring for InMemoryDataSourceTest."""
+    """Test class for in memory data source."""
 
     def test_single_process(self):
-        """Docstring for test_single_process."""
+        """Test single process."""
         sequence = list(range(12))
         in_memory_ds = data_sources.SharedMemoryDataSource(sequence)
 
@@ -95,12 +97,17 @@ class InMemoryDataSourceTest(DataSourceTest):
     def read_elements(
         in_memory_ds: data_sources.SharedMemoryDataSource, indices: Sequence[int]
     ) -> Sequence[Any]:
-        """Docstring for read_elements."""
+        """Read elements from the data source.
+
+        Returns:
+            The return value.
+
+        """
         res = [in_memory_ds[i] for i in indices]
         return res
 
     def test_multi_processes_co_read(self):
-        """Docstring for test_multi_processes_co_read."""
+        """Test multi processes co read."""
         sequence = list(range(12))
         in_memory_ds = data_sources.SharedMemoryDataSource(
             sequence, name="DataSourceTestingCoRead"
@@ -131,7 +138,7 @@ class InMemoryDataSourceTest(DataSourceTest):
         in_memory_ds.unlink()
 
     def test_empty_sequence(self):
-        """Docstring for test_empty_sequence."""
+        """Test empty sequence."""
         in_memory_ds = data_sources.SharedMemoryDataSource([])
         self.assertEmpty(in_memory_ds)
 
@@ -139,7 +146,7 @@ class InMemoryDataSourceTest(DataSourceTest):
         in_memory_ds.unlink()
 
     def test_str(self):
-        """Docstring for test_str."""
+        """Test str."""
         sequence = list(range(12))
         name = "DataSourceTestingStr"
         in_memory_ds = data_sources.SharedMemoryDataSource(sequence, name=name)
@@ -157,16 +164,16 @@ class InMemoryDataSourceTest(DataSourceTest):
     platform.system() == "Windows", "ArrayRecord isn't supported on Windows."
 )
 class ArrayRecordDataSourceTest(DataSourceTest):
-    """Docstring for ArrayRecordDataSourceTest."""
+    """Test class for array record data source."""
 
     def test_array_record_data_implements_random_access(self):
-        """Docstring for test_array_record_data_implements_random_access."""
+        """Test array record data implements random access."""
         assert issubclass(
             data_sources.ArrayRecordDataSource, dataset_base.RandomAccessDataSource
         )
 
     def test_array_record_source_empty_sequence(self):
-        """Docstring for test_array_record_source_empty_sequence."""
+        """Test array record source empty sequence."""
         with self.assertRaises(ValueError):
             data_sources.ArrayRecordDataSource([])
 
