@@ -80,6 +80,41 @@ def get_doc_coverage() -> float:
     return 100.0
 
 
+def get_api_compliance() -> float:
+    """Retrieve the current API compliance percentage.
+
+    Returns:
+        The API compliance percentage.
+    """
+    try:
+        import ast
+        import json
+
+        with open("snapshots/pygrain_v0.2.16.dev20260112.json") as f:
+            data = json.load(f)
+        apis = data["categories"]["extras"]
+        expected = set([api["name"] for api in apis])
+
+        with open("src/zero_grain/__init__.py") as f:
+            tree = ast.parse(f.read())
+
+        actual = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "__all__":
+                        if isinstance(node.value, ast.List):
+                            actual = set(
+                                getattr(elt, "value", getattr(elt, "s", None))
+                                for elt in node.value.elts
+                            )
+
+        covered = expected.intersection(actual)
+        return len(covered) / len(expected) * 100 if expected else 100.0
+    except Exception:
+        return 0.0
+
+
 def update_readme() -> None:
     """Update the coverage badges in the project's README.md."""
     if not os.path.exists("README.md"):
@@ -113,6 +148,28 @@ def update_readme() -> None:
         f"[![Doc Coverage](https://img.shields.io/badge/doc_coverage-{doc_str}%25-{doc_color}.svg)](#)",
         content,
     )
+
+    api_comp = get_api_compliance()
+    api_str = format_cov(api_comp)
+    api_color = get_color(api_comp)
+
+    api_re = re.compile(
+        r"\[?\!\[API Compliance\]\(https://img\.shields\.io/badge/(?:[aA]pi_)?(?:[cC]ompliance)-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?"
+    )
+    if api_re.search(content):
+        content = api_re.sub(
+            f"[![API Compliance](https://img.shields.io/badge/api_compliance-{api_str}%25-{api_color}.svg)](#)",
+            content,
+        )
+    else:
+        doc_badge_match = re.search(r"\[\!\[Doc Coverage\].*?(?:\n|$)", content)
+        if doc_badge_match:
+            insert_pos = doc_badge_match.end()
+            content = (
+                content[:insert_pos]
+                + f"[![API Compliance](https://img.shields.io/badge/api_compliance-{api_str}%25-{api_color}.svg)](#)\n"
+                + content[insert_pos:]
+            )
 
     with open("README.md", "w") as f:
         f.write(content)

@@ -29,8 +29,24 @@ repos:
         types: [python]
         pass_filenames: false
 
+
+      - id: check-api-compliance
+        name: Check API Conformance
+        entry: env PYTHONPATH=src:../ml-switcheroo-compiler/src python3 scripts/check_compliance.py
+        language: system
+        files: ^(SEMANTIC_PLAN\.md|src/.*\.py)$
+        pass_filenames: false
+
       - id: build
         name: Build Package
         entry: python3 -m build
         language: system
         pass_filenames: false
+
+      - id: check-deps
+        name: Check Dependencies (src/)
+        entry: python3 scripts/check_deps.py
+        language: system
+        types: [python]
+        pass_filenames: false
+

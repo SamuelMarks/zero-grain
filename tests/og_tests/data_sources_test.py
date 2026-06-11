@@ -153,7 +153,7 @@ class InMemoryDataSourceTest(DataSourceTest):
         actual_str = str(in_memory_ds)
         self.assertEqual(
             actual_str,
-            f"InMemoryDataSource(name={name}, len={len(sequence)})",
+            f"SharedMemoryDataSource(name={name}, len={len(sequence)})",
         )
 
         in_memory_ds.close()

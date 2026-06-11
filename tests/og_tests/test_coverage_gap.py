@@ -2,7 +2,6 @@
 
 import pytest
 import numpy as np
-from ml_switcheroo.core.tensor import Tensor
 from zero_grain.python import (
     RecordMetadata,
     Record,
@@ -69,7 +68,7 @@ def test_batch_elements_lists():
     """Test batch elements lists."""
     batch = [[1, 2], [3, 4]]
     res = _batch_elements(batch)
-    assert isinstance(res, Tensor)
+    assert isinstance(res, np.ndarray)
 
 
 def test_batch_elements_tuple_ndarray():
@@ -118,6 +117,9 @@ def test_data_loader_iterator_prefetch_state():
     # Test StopIteration in set_state
     it2.set_state({"last_seen_indices": {"0": 10}})
 
+    # Test initialization with state
+    DataLoaderIterator(dl2, state={"last_seen_indices": {"0": 10}})
+
 
 def test_checkpoint_handler():
     """Test checkpoint handler."""
@@ -142,7 +144,7 @@ def test_datasources_misc():
     sh_mem = SharedMemoryDataSource([1, 2], name="test")
     sh_mem.close()
     sh_mem.unlink()
-    assert str(sh_mem) == "InMemoryDataSource(name=test, len=2)"
+    assert str(sh_mem) == "SharedMemoryDataSource(name=test, len=2)"
 
     rng_ds = RangeDataSource(0, 10, 2)
     assert repr(rng_ds) == "RangeDataSource(start=0, stop=10, step=2)"
@@ -343,3 +345,26 @@ def test_load_batch_size_1():
 
     dl = load([1, 2], batch_size=1)
     assert len(dl.operations) == 0
+
+
+def test_batch_and_pad_ndarray():
+    """Test batch_and_pad with ndarray."""
+    elements = [np.array([1, 2])]
+    res = batch_and_pad(elements, 2)
+    assert isinstance(res, np.ndarray)
+    assert res.shape == (2, 2)
+    assert res[1][0] == 0
+
+
+def test_batch_and_pad_dtype():
+    """Test batch_and_pad with object having dtype."""
+
+    class MockTensor:
+        dtype = np.float32
+
+        def __array__(self):
+            return np.array([1, 2], dtype=self.dtype)
+
+    elements = [MockTensor()]
+    res = batch_and_pad(elements, 2)
+    assert len(res) == 2

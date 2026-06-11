@@ -1,9 +1,5 @@
 """zero_grain framework python module."""
 
-import ml_switcheroo.ops as ms_ops
-import ml_switcheroo.random as ms_random
-from ml_switcheroo.core.tensor import Tensor
-
 import collections
 import dataclasses
 import os
@@ -22,6 +18,8 @@ from typing import (
     TypeVar,
     Union,
 )
+
+import numpy as np
 
 _T = TypeVar("_T")
 
@@ -107,11 +105,11 @@ def _batch_elements(batch: List[Any]) -> Any:
                 )
         res = tuple(_batch_elements([x[i] for x in batch]) for i in range(len(first)))
         if isinstance(first, list):
-            return ms_ops.array(res)
+            return np.array(res)
         return res
     else:
         try:
-            return ms_ops.array(batch)
+            return np.array(batch)
         except Exception:
             return batch
 
@@ -169,7 +167,12 @@ class DatasetOptions:
 class DataLoaderIterator:
     """An iterator for a DataLoader."""
 
-    def __init__(self, data_loader: "DataLoader") -> None:
+    def __init__(
+        self,
+        data_loader: "DataLoader",
+        state: Optional[Dict[str, Any]] = None,
+        validate_state: bool = True,
+    ) -> None:
         """Initialize the DataLoaderIterator."""
         self.data_loader = data_loader
         self._iter = iter(data_loader.sampler)
@@ -197,6 +200,8 @@ class DataLoaderIterator:
             it = op(it)
 
         self._pipeline_iter: Iterator[Record] = it
+        if state is not None:
+            self.set_state(state)
 
     def __iter__(self) -> "DataLoaderIterator":
         """Return the iterator itself.
@@ -358,6 +363,9 @@ class PyGrainCheckpointHandler:
     def restore(self, *args: Any, **kwargs: Any) -> None:
         """Restore a checkpoint."""
         return
+
+
+CheckpointHandler = PyGrainCheckpointHandler
 
 
 class RandomAccessDataSource:
@@ -621,7 +629,7 @@ class SequentialSampler:
             total_elements = self.num_records
         if idx >= total_elements:
             raise IndexError()
-        return RecordMetadata(index=idx, record_key=idx, rng=ms_random.default_rng(idx))
+        return RecordMetadata(index=idx, record_key=idx, rng=np.random.default_rng(idx))
 
     def __iter__(self) -> Iterator[int]:
         """Iterate over the record keys.
@@ -697,7 +705,7 @@ class IndexSampler:
         for epoch in range(num_epochs):
             indices = list(range(num_records))
             if shuffle:
-                r = ms_random.default_rng(seed + epoch if seed is not None else epoch)
+                r = np.random.default_rng(seed + epoch if seed is not None else epoch)
                 r.shuffle(indices)
             if self.drop_remainder:
                 indices = indices[:global_per_epoch]
@@ -734,7 +742,7 @@ class IndexSampler:
         return RecordMetadata(
             index=idx,
             record_key=self._global_to_key[idx],
-            rng=ms_random.default_rng(idx),
+            rng=np.random.default_rng(idx),
         )
 
     def __iter__(self) -> Iterator[int]:
@@ -856,7 +864,7 @@ class RandomMapOperation:
             if record is not None and record.metadata is not None:
                 rng = getattr(record.metadata, "rng", None)
                 if rng is None:
-                    rng = ms_random.default_rng(record.metadata.index)
+                    rng = np.random.default_rng(record.metadata.index)
                 yield Record(
                     metadata=record.metadata.remove_record_key(),
                     data=self.random_map(record.data, rng),
@@ -953,7 +961,7 @@ class CopyNumPyArrayToSharedMemoryOperation:
             data.flags, "c_contiguous", False
         ):
             return data
-        if not isinstance(data, Tensor) and not hasattr(data, "dtype"):
+        if not isinstance(data, np.ndarray) and not hasattr(data, "dtype"):
             return data
         return SharedMemoryArrayMetadata()
 
@@ -1028,17 +1036,15 @@ def batch_and_pad(elements: List[Any], batch_size: int) -> Any:
     """
     pad_len = batch_size - len(elements)
     if pad_len > 0:
-        if isinstance(elements[0], Tensor):
-            pad = [ms_ops.zeros_like(elements[0])] * pad_len
+        if isinstance(elements[0], np.ndarray):
+            pad = [np.zeros_like(elements[0])] * pad_len
             elements.extend(pad)
         elif hasattr(elements[0], "dtype"):
-            import numpy as np
-
-            pad = [np.zeros_like(elements[0])] * pad_len
+            pad = [np.zeros_like(np.array(elements[0]))] * pad_len
             elements.extend(pad)
         else:
             elements.extend([0] * pad_len)
-    return ms_ops.array(elements)
+    return np.array(elements)
 
 
 class SharedMemoryDataSource:
@@ -1084,7 +1090,7 @@ class SharedMemoryDataSource:
             The result.
 
         """
-        return f"InMemoryDataSource(name={self.name}, len={len(self.elements)})"
+        return f"SharedMemoryDataSource(name={self.name}, len={len(self.elements)})"
 
 
 class SharedMemoryArrayMetadata:
