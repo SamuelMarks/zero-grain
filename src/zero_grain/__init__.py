@@ -1,7 +1,5 @@
 """Zero-grain data loading framework."""
 
-import ml_switcheroo
-
 from .python import (
     ArrayRecordDataSource,
     Batch,

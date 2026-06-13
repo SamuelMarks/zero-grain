@@ -17,9 +17,10 @@ STD_LIB = (
 ALLOWED_IMPORTS = {
     "numpy",
     "pydantic",
-    "ml_switcheroo",  # corresponds to ml-switcheroo-compiler, ml-switcheroo-ir
-    "cdd",  # corresponds to cdd-python
-    "zero_jax",  # corresponds to zero-jax
+    "ml_switcheroo",
+    "ml_switcheroo_compiler",
+    "cdd",
+    "zero_jax",
 }
 
 

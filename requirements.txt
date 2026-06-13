@@ -1,3 +1,2 @@
 pydantic
--e ../zero-jax
 -e ../ml-switcheroo-compiler

@@ -10,7 +10,7 @@ sys.path.insert(
         os.path.join(os.path.dirname(__file__), "../../ml-switcheroo-compiler/src")
     ),
 )
-import ml_switcheroo
+import ml_switcheroo_compiler as ml_switcheroo
 
 
 @pytest.fixture(autouse=True)
