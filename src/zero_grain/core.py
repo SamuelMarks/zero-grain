@@ -47,8 +47,43 @@ from ml_switcheroo_compiler.grain import (
 
 import dataclasses
 from typing import Any, Optional
-import numpy as np
 import logging
+
+import sys
+import random
+
+
+def _get_np():
+    if "numpy" in sys.modules:
+        return sys.modules["numpy"]
+    try:  # pragma: no cover
+        import importlib  # pragma: no cover
+
+        return importlib.import_module("numpy")  # pragma: no cover
+    except ImportError:  # pragma: no cover
+        return None  # pragma: no cover
+
+
+def _get_rng(seed):
+    np = _get_np()
+    if np:
+        return np.random.default_rng(seed)
+    r = random.Random(seed)  # pragma: no cover
+
+    class FakeRng:  # pragma: no cover
+        def permutation(self, n):  # pragma: no cover
+            lst = list(range(n))  # pragma: no cover
+            r.shuffle(lst)  # pragma: no cover
+            return lst  # pragma: no cover
+
+    return FakeRng()  # pragma: no cover
+
+
+def _get_random_state(seed):
+    np = _get_np()
+    if np:
+        return np.random.RandomState(seed)
+    return random.Random(seed)  # pragma: no cover
 
 
 @dataclasses.dataclass
@@ -105,11 +140,11 @@ def _batch_elements(batch):  # pragma: no cover
                 )
         res = tuple(_batch_elements([x[i] for x in batch]) for i in range(len(first)))
         if isinstance(first, list):
-            return np.array(res)
+            return _get_np().array(res) if _get_np() else res
         return res
     else:
         try:
-            return np.array(batch)
+            return _get_np().array(batch) if _get_np() else batch
         except Exception:
             return batch
 
@@ -122,8 +157,8 @@ def batch_and_pad(elements, batch_size):  # pragma: no cover
     if pad_len > 0:
         if isinstance(first, dict):
             pass
-        elif isinstance(first, np.ndarray):
-            pad_val = np.zeros_like(first)
+        elif _get_np() and isinstance(first, _get_np().ndarray):
+            pad_val = _get_np().zeros_like(first)
             elements = list(elements) + [pad_val] * pad_len
         elif isinstance(first, (int, float)):
             elements = list(elements) + [0] * pad_len
@@ -134,7 +169,7 @@ def batch_and_pad(elements, batch_size):  # pragma: no cover
                 elements = list(elements) + [0] * pad_len
     res = _batch_elements(elements)
     if isinstance(res, list):
-        return np.array(res)
+        return _get_np().array(res) if _get_np() else res
     return res
 
 
@@ -180,7 +215,7 @@ def random_map_operation_call(self, iterator):  # pragma: no cover
         if record is not None and record.metadata is not None:
             rng = getattr(record.metadata, "rng", None)
             if rng is None:
-                rng = np.random.default_rng(record.metadata.index)
+                rng = _get_rng(record.metadata.index)
             yield Record(
                 metadata=record.metadata.remove_record_key(),
                 data=self.random_map_function(record.data, rng)
@@ -232,7 +267,7 @@ def copy_numpy_array_call(self, iterator):  # pragma: no cover
         if record is not None and record.metadata is not None:
             data = record.data
             if (
-                isinstance(data, np.ndarray)
+                (_get_np() and isinstance(data, _get_np().ndarray))
                 and not getattr(data.dtype, "hasobject", False)
                 and data.flags.c_contiguous
             ):
@@ -255,7 +290,7 @@ MapWithIndexOperation.map_with_index = lambda self, i, x: (_ for _ in ()).throw(
 def copy_numpy_array_map(self, element):  # pragma: no cover
     from ml_switcheroo_compiler.grain import SharedMemoryArrayMetadata
 
-    if isinstance(element, np.ndarray):
+    if _get_np() and isinstance(element, _get_np().ndarray):
         if getattr(element.dtype, "hasobject", False) or not element.flags.c_contiguous:
             return element
         return SharedMemoryArrayMetadata()
@@ -463,16 +498,14 @@ def index_sampler_getitem(self, idx):
     epoch = idx // self.num_records
     i = idx % self.num_records
     if self.shuffle:
-        rng = np.random.default_rng(
-            self.seed + epoch if self.seed is not None else epoch
-        )
+        rng = _get_rng(self.seed + epoch if self.seed is not None else epoch)
         key = int(rng.permutation(self.num_records)[i])
     else:
         key = i
     return RecordMetadata(
         index=idx,
         record_key=key,
-        rng=np.random.RandomState(self.seed + idx if self.seed is not None else idx),
+        rng=_get_random_state(self.seed + idx if self.seed is not None else idx),
     )
 
 

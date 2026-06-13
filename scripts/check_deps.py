@@ -15,12 +15,10 @@ STD_LIB = (
 
 # Allowed imports in non-test code
 ALLOWED_IMPORTS = {
-    "numpy",
     "pydantic",
     "ml_switcheroo",
     "ml_switcheroo_compiler",
     "cdd",
-    "zero_jax",
 }
 
 

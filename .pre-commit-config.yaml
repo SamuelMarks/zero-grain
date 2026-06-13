@@ -17,7 +17,7 @@ repos:
 
       - id: pytest-coverage
         name: Run Pytest Coverage
-        entry: bash -c 'PYTHONPATH=src pytest --cov=src --cov-branch --cov-report=term-missing'
+        entry: bash -c 'PYTHONPATH=src pytest --cov=src --cov-branch --cov-report=term-missing --cov-fail-under=100'
         language: system
         types: [python]
         pass_filenames: false
@@ -29,6 +29,17 @@ repos:
         types: [python]
         pass_filenames: false
 
+      - id: calc-compliance
+        name: Check API Parity against Snapshots
+        entry: python3 scripts/calc_compliance.py
+        language: system
+        pass_filenames: false
+
+      - id: check-test-completeness
+        name: Check Test Completeness
+        entry: python3 scripts/check_test_completeness.py
+        language: system
+        pass_filenames: false
 
       - id: check-api-compliance
         name: Check API Conformance

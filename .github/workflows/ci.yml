@@ -35,8 +35,14 @@ jobs:
 
     - name: Test & Coverage
       run: |
-        PYTHONPATH=src pytest --cov=src --cov-report=xml
+        PYTHONPATH=src pytest --cov=src --cov-report=xml --cov-fail-under=100
         
+    - name: Check API Parity against Snapshots
+      run: python scripts/calc_compliance.py
+
+    - name: Check Test Completeness
+      run: python scripts/check_test_completeness.py
+
     - name: Update Badges
       run: |
         python scripts/update_badges.py

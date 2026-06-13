@@ -1,5 +1,6 @@
 import json
 import ast
+import sys
 
 with open("snapshots/pygrain_v0.2.16.dev20260112.json") as f:
     data = json.load(f)
@@ -28,3 +29,6 @@ print(f"Total APIs: {len(expected)}")
 print(f"Covered APIs: {len(covered)}")
 print(f"Missing APIs: {missing}")
 print(f"Compliance: {len(covered) / len(expected) * 100:.2f}%")
+
+if missing:
+    sys.exit(1)
