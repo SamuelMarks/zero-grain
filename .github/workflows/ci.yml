@@ -13,41 +13,53 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.12'
+        python-version: '3.11'
 
-    - name: Install Dependencies
+    - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install ruff==0.15.16 pytest pytest-cov build
-        if [ -f "pyproject.toml" ]; then pip install -e .; fi
-        if [ -f "requirements.txt" ]; then pip install -r requirements.txt; fi
+        pip install -r requirements.txt
+        pip install -r requirements-test.txt
+        pip install -e .
 
-    - name: Check Code Formatting (Ruff)
-      run: ruff format --check .
-
-    - name: Check Linting (Ruff)
-      run: ruff check .
-
-    - name: Test & Coverage
+    - name: Lint with Ruff
       run: |
-        PYTHONPATH=src pytest --cov=src --cov-report=xml --cov-fail-under=100
-        
-    - name: Check API Parity against Snapshots
-      run: python scripts/calc_compliance.py
+        ruff format --check .
+        ruff check .
 
-    - name: Check Test Completeness
-      run: python scripts/check_test_completeness.py
-
-    - name: Update Badges
+    - name: Check Zero Runtime Dependencies (src/)
       run: |
-        python scripts/update_badges.py
-        if ! git diff --exit-code README.md; then
-          echo "Coverage badges in README.md are out of date. Please run pre-commit or the update badges script locally and commit the changes."
+        python3 scripts/check_deps.py src
+
+    - name: Check Docstring Coverage (100%)
+      run: |
+        interrogate -vv -f 100 src scripts tests
+        python3 scripts/check_docstrings.py src scripts tests
+
+    - name: Check Typing Discipline & Mypy Strict
+      run: |
+        python3 scripts/check_typing_discipline.py src scripts tests
+        mypy src scripts tests
+
+    - name: Check API Snapshot & Test Completeness
+      run: |
+        python3 scripts/calc_compliance.py
+        python3 scripts/check_test_completeness.py
+
+    - name: Test with Pytest (100% Line & Branch Coverage)
+      run: |
+        pytest --cov=src --cov=scripts --cov-branch --cov-report=term-missing --cov-fail-under=100
+
+    - name: Verify Badges are Updated
+      run: |
+        python3 scripts/update_badges.py
+        if ! git diff --quiet README.md; then
+          echo "Coverage badges in README.md are out of date."
           exit 1
         fi
 

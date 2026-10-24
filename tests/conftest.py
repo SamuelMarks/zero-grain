@@ -1,21 +1,16 @@
-"""Module docstring."""
+"""Pytest configuration for the zero_grain test suite."""
 
+from __future__ import annotations
+
+from collections.abc import Iterator
 import pytest
-import sys
-import os
-
-sys.path.insert(
-    0,
-    os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../../ml-switcheroo-compiler/src")
-    ),
-)
-import ml_switcheroo_compiler as ml_switcheroo
 
 
 @pytest.fixture(autouse=True)
-def switcheroo_config():
-    # Unified pytest configuration that imports switcheroo config contexts
-    """Docstring for switcheroo_config."""
-    with ml_switcheroo.EagerMode():
-        yield
+def zero_grain_test_env() -> Iterator[None]:
+    """Provide a clean test execution context for each test function.
+
+    Yields:
+        None: Execution control to the running test.
+    """
+    yield

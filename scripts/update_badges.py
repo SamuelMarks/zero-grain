@@ -1,179 +1,134 @@
-"""Script to automatically update coverage badges in the README.md file."""
+#!/usr/bin/env python3
+"""Script to update test, doc, and API compliance badges in ``README.md``."""
 
-import os
+from __future__ import annotations
+
+from collections.abc import Sequence
+from pathlib import Path
 import re
-import subprocess
-import json
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts import calc_compliance  # noqa: E402
 
 
 def get_color(pct: float) -> str:
-    """Get the color for a badge based on the coverage percentage.
+    """Select a shields.io badge color for a percentage value.
 
     Args:
-        pct: The coverage percentage.
+        pct (float): Coverage or compliance percentage in ``[0.0, 100.0]``.
 
     Returns:
-        The color name to be used for the badge.
-
+        str: Badge color name.
     """
-    if pct >= 100:
+    if pct >= 95.0:
         return "brightgreen"
-    if pct >= 90:
+    if pct >= 80.0:
         return "green"
-    if pct >= 80:
-        return "yellowgreen"
-    if pct >= 70:
+    if pct >= 60.0:
         return "yellow"
-    if pct >= 60:
-        return "orange"
     return "red"
 
 
-def format_cov(cov: float) -> str:
-    """Format the coverage percentage to a string.
+def format_badge_block(
+    test_pct: float = 100.0,
+    doc_pct: float = 100.0,
+    api_pct: float = 100.0,
+) -> str:
+    """Format the three markdown badge lines for test, doc, and API compliance.
 
     Args:
-        cov: The coverage percentage.
+        test_pct (float): Test coverage percentage.
+        doc_pct (float): Documentation coverage percentage.
+        api_pct (float): API compliance percentage.
 
     Returns:
-        The formatted coverage string.
-
+        str: Multi-line markdown badge string.
     """
-    if int(cov) == cov:
-        return str(int(cov))
-    return f"{cov:.1f}"
+    test_str = f"{test_pct:.1f}".rstrip("0").rstrip(".")
+    doc_str = f"{doc_pct:.1f}".rstrip("0").rstrip(".")
+    api_str = f"{api_pct:.1f}".rstrip("0").rstrip(".")
 
+    test_color = get_color(test_pct)
+    doc_color = get_color(doc_pct)
+    api_color = get_color(api_pct)
 
-def get_test_coverage() -> float:
-    """Run tests and retrieve the current test coverage percentage.
-
-    Returns:
-        The total test coverage percentage.
-
-    """
-    try:
-        env = os.environ.copy()
-        env["PYTHONPATH"] = "src"
-        subprocess.run(
-            ["coverage", "run", "-m", "pytest"],
-            env=env,
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        subprocess.run(["coverage", "json", "-o", "coverage.json"], check=False)
-        with open("coverage.json", "r") as f:
-            data = json.load(f)
-            return data["totals"]["percent_covered"]
-    except Exception:
-        return 0.0
-
-
-def get_doc_coverage() -> float:
-    """Retrieve the current documentation coverage percentage.
-
-    Returns:
-        The documentation coverage percentage.
-
-    """
-    # Placeholder for actual AST linter coverage logic
-    return 100.0
-
-
-def get_api_compliance() -> float:
-    """Retrieve the current API compliance percentage.
-
-    Returns:
-        The API compliance percentage.
-    """
-    try:
-        import ast
-        import json
-
-        with open("snapshots/pygrain_v0.2.16.dev20260112.json") as f:
-            data = json.load(f)
-        apis = data["categories"]["extras"]
-        expected = set([api["name"] for api in apis])
-
-        with open("src/zero_grain/__init__.py") as f:
-            tree = ast.parse(f.read())
-
-        actual = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id == "__all__":
-                        if isinstance(node.value, ast.List):
-                            actual = set(
-                                getattr(elt, "value", getattr(elt, "s", None))
-                                for elt in node.value.elts
-                            )
-
-        covered = expected.intersection(actual)
-        return len(covered) / len(expected) * 100 if expected else 100.0
-    except Exception:
-        return 0.0
-
-
-def update_readme() -> None:
-    """Update the coverage badges in the project's README.md."""
-    if not os.path.exists("README.md"):
-        return
-
-    test_cov = get_test_coverage()
-    doc_cov = get_doc_coverage()
-
-    test_str = format_cov(test_cov)
-    doc_str = format_cov(doc_cov)
-
-    test_color = get_color(test_cov)
-    doc_color = get_color(doc_cov)
-
-    with open("README.md", "r") as f:
-        content = f.read()
-
-    # Generic replacements that handle both the cdd-go markdown format with the `#` anchor and the older ml-switcheroo format
-    test_re = re.compile(
-        r"\[?\!\[Test Coverage\]\(https://img\.shields\.io/badge/(?:[tT]est_)?(?:[cC]overage)-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?"
-    )
-    content = test_re.sub(
-        f"[![Test Coverage](https://img.shields.io/badge/test_coverage-{test_str}%25-{test_color}.svg)](#)",
-        content,
-    )
-
-    doc_re = re.compile(
-        r"\[?\!\[Doc Coverage\]\(https://img\.shields\.io/badge/(?:[dD]oc_)?(?:[cC]overage)-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?"
-    )
-    content = doc_re.sub(
-        f"[![Doc Coverage](https://img.shields.io/badge/doc_coverage-{doc_str}%25-{doc_color}.svg)](#)",
-        content,
-    )
-
-    api_comp = get_api_compliance()
-    api_str = format_cov(api_comp)
-    api_color = get_color(api_comp)
-
-    api_re = re.compile(
-        r"\[?\!\[API Compliance\]\(https://img\.shields\.io/badge/(?:[aA]pi_)?(?:[cC]ompliance)-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?"
-    )
-    if api_re.search(content):
-        content = api_re.sub(
+    return chr(10).join(
+        [
+            f"[![Test Coverage](https://img.shields.io/badge/test_coverage-{test_str}%25-{test_color}.svg)](#)",
+            f"[![Doc Coverage](https://img.shields.io/badge/doc_coverage-{doc_str}%25-{doc_color}.svg)](#)",
             f"[![API Compliance](https://img.shields.io/badge/api_compliance-{api_str}%25-{api_color}.svg)](#)",
+        ]
+    )
+
+
+def update_readme(
+    readme_path: Path = Path("README.md"),
+    test_pct: float = 100.0,
+    doc_pct: float = 100.0,
+    api_pct: float | None = None,
+) -> bool:
+    """Update the coverage and compliance badges in ``readme_path``.
+
+    Args:
+        readme_path (Path): Path to ``README.md``.
+        test_pct (float): Test coverage percentage.
+        doc_pct (float): Documentation coverage percentage.
+        api_pct (float | None): API compliance percentage (computed dynamically if None).
+
+    Returns:
+        bool: True if ``readme_path`` existed and was processed, False otherwise.
+    """
+    if not readme_path.exists():
+        return False
+
+    if api_pct is None:
+        total, covered, _ = calc_compliance.compute_compliance()
+        effective_api_pct = (covered / total * 100.0) if total > 0 else 100.0
+    else:
+        effective_api_pct = api_pct
+
+    content = readme_path.read_text(encoding="utf-8")
+    badges = format_badge_block(test_pct=test_pct, doc_pct=doc_pct, api_pct=effective_api_pct)
+    lines = badges.splitlines()
+
+    content = re.sub(
+        r"\[!\[Test Coverage\]\(https://img\.shields\.io/badge/test_coverage-.*?\)\]\(#\)",
+        lines[0],
+        content,
+    )
+    content = re.sub(
+        r"\[!\[Doc Coverage\]\(https://img\.shields\.io/badge/doc_coverage-.*?\)\]\(#\)",
+        lines[1],
+        content,
+    )
+    if "[![API Compliance]" in content:
+        content = re.sub(
+            r"\[!\[API Compliance\]\(https://img\.shields\.io/badge/api_compliance-.*?\)\]\(#\)",
+            lines[2],
             content,
         )
-    else:
-        doc_badge_match = re.search(r"\[\!\[Doc Coverage\].*?(?:\n|$)", content)
-        if doc_badge_match:
-            insert_pos = doc_badge_match.end()
-            content = (
-                content[:insert_pos]
-                + f"[![API Compliance](https://img.shields.io/badge/api_compliance-{api_str}%25-{api_color}.svg)](#)\n"
-                + content[insert_pos:]
-            )
+    elif "[![Doc Coverage]" in content:
+        content = content.replace(lines[1], lines[1] + chr(10) + lines[2])
 
-    with open("README.md", "w") as f:
-        f.write(content)
+    readme_path.write_text(content, encoding="utf-8")
+    return True
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entry point for updating ``README.md`` badges.
+
+    Args:
+        argv (Sequence[str] | None): Optional CLI arguments ``[readme_path]``.
+
+    Returns:
+        int: Zero on success.
+    """
+    args = list(argv) if argv is not None else sys.argv[1:]
+    target = Path(args[0]) if args else Path("README.md")
+    update_readme(target)
+    return 0
 
 
 if __name__ == "__main__":
-    update_readme()
+    sys.exit(main())

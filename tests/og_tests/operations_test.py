@@ -1,4 +1,4 @@
-"""Module docstring."""
+"""Official Grain tests for pipeline operations."""
 
 from __future__ import annotations
 
@@ -15,39 +15,67 @@ from __future__ import annotations
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for Operations."""
 
-import collections
+from collections.abc import Sequence
 import dataclasses
 import re
+from typing import NamedTuple
 
 from absl.testing import absltest
 from absl.testing import parameterized
-import multiprocessing
+import numpy as np
 from zero_grain import python as record
+from zero_grain._types import ElementTree, RNGGeneratorProtocol, T_in
 from zero_grain.python import BatchOperation
 from zero_grain.python import FilterOperation
 from zero_grain.python import MapOperation
 from zero_grain.python import RandomMapOperation
-import numpy as np
+
+
+class _PointTuple(NamedTuple):
+    """Typed NamedTuple used in ``test_batch_named_tuples``."""
+
+    x: int | np.ndarray
+    y: str | np.ndarray
 
 
 class OperationsTest(parameterized.TestCase):
     """Test class for operations."""
 
-    def compare_output(self, actual, expected):
-        """Compare the output."""
+    def compare_output(
+        self,
+        actual: Sequence[record.Record[T_in]],
+        expected: Sequence[record.Record[ElementTree]],
+    ) -> None:
+        """Compare actual and expected record lists ignoring RNG objects.
+
+        Args:
+            actual (Sequence[record.Record[T_in]]): Actual output record list.
+            expected (Sequence[record.Record[ElementTree]]): Expected output record list.
+        """
         self.assertEqual(len(actual), len(expected))
         for a, b in zip(actual, expected):
-            a.metadata.rng = None
-            b.metadata.rng = None
-            # np testing does not compare nested np arrays element by elements when
-            # a dataclass is used, hence converting dataclasses to tuples.
+            if a.metadata is not None:
+                a.metadata.rng = None
+            if b.metadata is not None:
+                b.metadata.rng = None
             np.testing.assert_equal(dataclasses.astuple(a), dataclasses.astuple(b))
 
-    def test_map_operation(self):
+    def test_map_operation(self) -> None:
         """Test map operation."""
-        map_operation = MapOperation(map_function=lambda data: data + 1)
+
+        def _inc(data: int) -> int:
+            """Increment ``data`` by 1.
+
+            Args:
+                data (int): Input integer.
+
+            Returns:
+                int: Incremented integer.
+            """
+            return data + 1
+
+        map_operation: MapOperation[int, int] = MapOperation(map_function=_inc)
         input_data = iter(
             [
                 record.Record(record.RecordMetadata(index=0, record_key=3), 1),
@@ -57,7 +85,7 @@ class OperationsTest(parameterized.TestCase):
             ]
         )
 
-        expected_output_data = [
+        expected_output_data: list[record.Record[ElementTree]] = [
             record.Record(record.RecordMetadata(index=0, record_key=None), 2),
             record.Record(record.RecordMetadata(index=1, record_key=None), 3),
             record.Record(record.RecordMetadata(index=2, record_key=None), 4),
@@ -66,63 +94,82 @@ class OperationsTest(parameterized.TestCase):
         actual_output_data = list(map_operation(input_data))
         self.compare_output(actual_output_data, expected_output_data)
 
-    def test_random_map_operation(self):
+    def test_random_map_operation(self) -> None:
         """Test random map operation."""
         delta = 0.1
-        random_map_operation = RandomMapOperation(
-            random_map_function=lambda data, rng: data + rng.uniform(-delta, delta)
+
+        def _perturb(data: int, rng: RNGGeneratorProtocol) -> float:
+            """Add uniform noise in ``[-delta, delta)`` to ``data``.
+
+            Args:
+                data (int): Base integer value.
+                rng (RNGGeneratorProtocol): Per-record RNG.
+
+            Returns:
+                float: Perturbed float value.
+            """
+            return data + rng.uniform(-delta, delta)
+
+        random_map_operation: RandomMapOperation[int, float] = RandomMapOperation(
+            random_map_function=_perturb,
         )
 
         input_rng = np.random.Generator(np.random.Philox(key=0))
-        input_record = record.Record(
-            record.RecordMetadata(index=0, record_key=1, rng=input_rng), 1
-        )
+        input_record = record.Record(record.RecordMetadata(index=0, record_key=1, rng=input_rng), 1)
         input_data = iter([input_record])
 
         actual_output_data = list(random_map_operation(input_data))
         self.assertLen(actual_output_data, 1)
         actual_output_record = actual_output_data[0]
         self.assertIsInstance(actual_output_record, record.Record)
-        self.assertEqual(
-            actual_output_record.metadata.index, input_record.metadata.index
-        )
+        assert actual_output_record.metadata is not None
+        assert input_record.metadata is not None
+        self.assertEqual(actual_output_record.metadata.index, input_record.metadata.index)
         self.assertIsNone(actual_output_record.metadata.record_key)
         self.assertEqual(actual_output_record.metadata.rng, input_rng)
-        self.assertAlmostEqual(
-            actual_output_record.data, input_record.data, delta=delta
-        )
+        self.assertAlmostEqual(actual_output_record.data, input_record.data, delta=delta)
 
-    def test_map_operation_with_callable_objects(self):
-        """Test map operation with callable objects."""
+    def test_map_operation_with_callable_objects(self) -> None:
+        """Test map operation with callable instances."""
 
-        class CallableObject:
-            """Callable object."""
+        class CallableIncrement:
+            """Callable incrementer class."""
 
-            def __call__(self, x):
-                """Call the object.
+            def __call__(self, x: int) -> int:
+                """Increment ``x`` by 1.
+
+                Args:
+                    x (int): Input numeric value.
 
                 Returns:
-                    The return value.
-
+                    int: Incremented numeric value.
                 """
                 return x + 1
 
-        map_operation = MapOperation(map_function=CallableObject())
-        input_data = iter(
-            [record.Record(record.RecordMetadata(index=0, record_key=3), 1)]
-        )
+        map_operation: MapOperation[int, int] = MapOperation(map_function=CallableIncrement())
+        input_data = iter([record.Record(record.RecordMetadata(index=0, record_key=3), 1)])
 
-        expected_output_data = [
+        expected_output_data: list[record.Record[ElementTree]] = [
             record.Record(record.RecordMetadata(index=0, record_key=None), 2)
         ]
         actual_output_data = list(map_operation(input_data))
         self.compare_output(actual_output_data, expected_output_data)
 
-    def test_filter_operation(self):
+    def test_filter_operation(self) -> None:
         """Test filter operation."""
-        filter_operation = FilterOperation(
-            condition_function=lambda data: data % 2 == 0
-        )
+
+        def _is_even(data: int) -> bool:
+            """Return True if ``data`` is even.
+
+            Args:
+                data (int): Candidate integer.
+
+            Returns:
+                bool: True if even.
+            """
+            return data % 2 == 0
+
+        filter_operation: FilterOperation[int] = FilterOperation(condition_function=_is_even)
         input_data = iter(
             [
                 record.Record(record.RecordMetadata(index=0, record_key=3), 1),
@@ -132,7 +179,7 @@ class OperationsTest(parameterized.TestCase):
             ]
         )
 
-        expected_output_data = [
+        expected_output_data: list[record.Record[ElementTree]] = [
             record.Record(record.RecordMetadata(index=1, record_key=None), 2),
             record.Record(record.RecordMetadata(index=3, record_key=None), 4),
         ]
@@ -140,9 +187,7 @@ class OperationsTest(parameterized.TestCase):
         actual_output_data = list(filter_operation(input_data))
         self.compare_output(actual_output_data, expected_output_data)
 
-    ############ BATCH TESTS ############
-
-    def test_batch_integer_scalars(self):
+    def test_batch_integer_scalars(self) -> None:
         """Test batch integer scalars."""
         input_data = iter(
             [
@@ -152,19 +197,15 @@ class OperationsTest(parameterized.TestCase):
                 record.Record(record.RecordMetadata(index=3, record_key=0), 4),
             ]
         )
-        batch_operation = BatchOperation(batch_size=2)
-        expected_output_data = [
-            record.Record(
-                record.RecordMetadata(index=1, record_key=None), np.asarray([1, 2])
-            ),
-            record.Record(
-                record.RecordMetadata(index=3, record_key=None), np.asarray([3, 4])
-            ),
+        batch_operation: BatchOperation[int] = BatchOperation(batch_size=2)
+        expected_output_data: list[record.Record[ElementTree]] = [
+            record.Record(record.RecordMetadata(index=1, record_key=None), np.asarray([1, 2])),
+            record.Record(record.RecordMetadata(index=3, record_key=None), np.asarray([3, 4])),
         ]
         actual_output_data = list(batch_operation(input_data))
         self.compare_output(actual_output_data, expected_output_data)
 
-    def test_batch_with_remainder(self):
+    def test_batch_with_remainder(self) -> None:
         """Test batch with remainder."""
         input_data = iter(
             [
@@ -175,22 +216,16 @@ class OperationsTest(parameterized.TestCase):
                 record.Record(record.RecordMetadata(index=4, record_key=0), 5),
             ]
         )
-        batch_operation = BatchOperation(batch_size=2)
-        expected_output_data = [
-            record.Record(
-                record.RecordMetadata(index=1, record_key=None), np.asarray([1, 2])
-            ),
-            record.Record(
-                record.RecordMetadata(index=3, record_key=None), np.asarray([3, 4])
-            ),
-            record.Record(
-                record.RecordMetadata(index=4, record_key=None), np.asarray([5])
-            ),
+        batch_operation: BatchOperation[int] = BatchOperation(batch_size=2)
+        expected_output_data: list[record.Record[ElementTree]] = [
+            record.Record(record.RecordMetadata(index=1, record_key=None), np.asarray([1, 2])),
+            record.Record(record.RecordMetadata(index=3, record_key=None), np.asarray([3, 4])),
+            record.Record(record.RecordMetadata(index=4, record_key=None), np.asarray([5])),
         ]
         actual_output_data = list(batch_operation(input_data))
         self.compare_output(actual_output_data, expected_output_data)
 
-    def test_batch_drop_remainder(self):
+    def test_batch_drop_remainder(self) -> None:
         """Test batch drop remainder."""
         input_data = iter(
             [
@@ -201,19 +236,15 @@ class OperationsTest(parameterized.TestCase):
                 record.Record(record.RecordMetadata(index=4, record_key=0), 5),
             ]
         )
-        batch_operation = BatchOperation(batch_size=2, drop_remainder=True)
-        expected_output_data = [
-            record.Record(
-                record.RecordMetadata(index=1, record_key=None), np.asarray([1, 2])
-            ),
-            record.Record(
-                record.RecordMetadata(index=3, record_key=None), np.asarray([3, 4])
-            ),
+        batch_operation: BatchOperation[int] = BatchOperation(batch_size=2, drop_remainder=True)
+        expected_output_data: list[record.Record[ElementTree]] = [
+            record.Record(record.RecordMetadata(index=1, record_key=None), np.asarray([1, 2])),
+            record.Record(record.RecordMetadata(index=3, record_key=None), np.asarray([3, 4])),
         ]
         actual_output_data = list(batch_operation(input_data))
         self.compare_output(actual_output_data, expected_output_data)
 
-    def test_batch_dict_of_numpy_arrays_no_shared_memory(self):
+    def test_batch_dict_of_numpy_arrays_no_shared_memory(self) -> None:
         """Test batch dict of numpy arrays no shared memory."""
         input_data = iter(
             [
@@ -227,8 +258,8 @@ class OperationsTest(parameterized.TestCase):
                 ),
             ]
         )
-        batch_operation = BatchOperation(batch_size=2)
-        expected_output_data = [
+        batch_operation: BatchOperation[dict[str, np.ndarray]] = BatchOperation(batch_size=2)
+        expected_output_data: list[record.Record[ElementTree]] = [
             record.Record(
                 record.RecordMetadata(index=1, record_key=None),
                 {"a": np.array([[1, 2], [3, 4]])},
@@ -237,21 +268,19 @@ class OperationsTest(parameterized.TestCase):
         actual_output_data = list(batch_operation(input_data))
         self.compare_output(actual_output_data, expected_output_data)
 
-    def test_batch_tuples(self):
+    def test_batch_tuples(self) -> None:
         """Test batch tuples."""
         input_data = iter(
             [
-                record.Record(
-                    record.RecordMetadata(index=0, record_key=4), (1, 10.0, "text")
-                ),
+                record.Record(record.RecordMetadata(index=0, record_key=4), (1, 10.0, "text")),
                 record.Record(
                     record.RecordMetadata(index=1, record_key=3),
                     (2, 20.0, "text_2"),
                 ),
             ]
         )
-        batch_operation = BatchOperation(batch_size=2)
-        expected_output_data = [
+        batch_operation: BatchOperation[tuple[int, float, str]] = BatchOperation(batch_size=2)
+        expected_output_data: list[record.Record[ElementTree]] = [
             record.Record(
                 record.RecordMetadata(index=1, record_key=None),
                 (
@@ -264,32 +293,31 @@ class OperationsTest(parameterized.TestCase):
         actual_output_data = list(batch_operation(input_data))
         self.compare_output(actual_output_data, expected_output_data)
 
-    def test_batch_named_tuples(self):
+    def test_batch_named_tuples(self) -> None:
         """Test batch named tuples."""
-        point = collections.namedtuple("point", "x y")
         input_data = iter(
             [
                 record.Record(
                     record.RecordMetadata(index=0, record_key=4),
-                    point(x=1, y="str"),
+                    _PointTuple(x=1, y="str"),
                 ),
                 record.Record(
                     record.RecordMetadata(index=1, record_key=3),
-                    point(x=2, y="str_2"),
+                    _PointTuple(x=2, y="str_2"),
                 ),
             ]
         )
-        batch_operation = BatchOperation(batch_size=2)
-        expected_output_data = [
+        batch_operation: BatchOperation[_PointTuple] = BatchOperation(batch_size=2)
+        expected_output_data: list[record.Record[ElementTree]] = [
             record.Record(
                 record.RecordMetadata(index=1, record_key=None),
-                point(x=np.array([1, 2]), y=np.array(["str", "str_2"])),
+                _PointTuple(x=np.array([1, 2]), y=np.array(["str", "str_2"])),
             )
         ]
         actual_output_data = list(batch_operation(input_data))
         self.compare_output(actual_output_data, expected_output_data)
 
-    def test_batch_lists(self):
+    def test_batch_lists(self) -> None:
         """Test batch lists."""
         input_data = iter(
             [
@@ -297,8 +325,8 @@ class OperationsTest(parameterized.TestCase):
                 record.Record(record.RecordMetadata(index=1, record_key=3), [3, 4]),
             ]
         )
-        batch_operation = BatchOperation(batch_size=2)
-        expected_output_data = [
+        batch_operation: BatchOperation[list[int]] = BatchOperation(batch_size=2)
+        expected_output_data: list[record.Record[ElementTree]] = [
             record.Record(
                 record.RecordMetadata(index=1, record_key=None),
                 np.array([[1, 3], [2, 4]]),
@@ -307,37 +335,25 @@ class OperationsTest(parameterized.TestCase):
         actual_output_data = list(batch_operation(input_data))
         self.compare_output(actual_output_data, expected_output_data)
 
-    def test_batch_mixed_scalar_numbers(self):
+    def test_batch_mixed_scalar_numbers(self) -> None:
         """Test batch mixed scalar numbers."""
-        input_data = iter(
-            [
-                record.Record(record.RecordMetadata(index=0, record_key=4), 1),
-                record.Record(record.RecordMetadata(index=1, record_key=3), 2.0),
-                record.Record(
-                    record.RecordMetadata(index=2, record_key=2), np.int32(3)
-                ),
-                record.Record(
-                    record.RecordMetadata(index=3, record_key=1), np.int64(4)
-                ),
-                record.Record(record.RecordMetadata(index=4, record_key=0), float(5.0)),
-            ]
-        )
-        batch_operation = BatchOperation(batch_size=2)
-        expected_output_data = [
-            record.Record(
-                record.RecordMetadata(index=1, record_key=None), np.array([1, 2])
-            ),
-            record.Record(
-                record.RecordMetadata(index=3, record_key=None), np.array([3, 4])
-            ),
-            record.Record(
-                record.RecordMetadata(index=4, record_key=None), np.array([5])
-            ),
+        input_data: list[record.Record[int | float]] = [
+            record.Record(record.RecordMetadata(index=0, record_key=4), 1),
+            record.Record(record.RecordMetadata(index=1, record_key=3), 2.0),
+            record.Record(record.RecordMetadata(index=2, record_key=2), int(np.int32(3))),
+            record.Record(record.RecordMetadata(index=3, record_key=1), int(np.int64(4))),
+            record.Record(record.RecordMetadata(index=4, record_key=0), float(5.0)),
         ]
-        actual_output_data = list(batch_operation(input_data))
+        batch_operation: BatchOperation[int | float] = BatchOperation(batch_size=2)
+        expected_output_data: list[record.Record[ElementTree]] = [
+            record.Record(record.RecordMetadata(index=1, record_key=None), np.array([1, 2])),
+            record.Record(record.RecordMetadata(index=3, record_key=None), np.array([3, 4])),
+            record.Record(record.RecordMetadata(index=4, record_key=None), np.array([5])),
+        ]
+        actual_output_data = list(batch_operation(iter(input_data)))
         self.compare_output(actual_output_data, expected_output_data)
 
-    def test_batch_lists_different_length(self):
+    def test_batch_lists_different_length(self) -> None:
         """Test batch lists different length."""
         input_data = iter(
             [
@@ -345,7 +361,7 @@ class OperationsTest(parameterized.TestCase):
                 record.Record(record.RecordMetadata(index=1, record_key=3), [3, 4, 5]),
             ]
         )
-        batch_operation = BatchOperation(batch_size=2)
+        batch_operation: BatchOperation[list[int]] = BatchOperation(batch_size=2)
         with np.testing.assert_raises_regex(
             TypeError,
             re.escape(
@@ -356,7 +372,7 @@ class OperationsTest(parameterized.TestCase):
         ):
             list(batch_operation(input_data))
 
-    def test_batch_dicts_different_keys(self):
+    def test_batch_dicts_different_keys(self) -> None:
         """Test batch dicts different keys."""
         input_data = iter(
             [
@@ -364,7 +380,7 @@ class OperationsTest(parameterized.TestCase):
                 record.Record(record.RecordMetadata(index=1, record_key=3), {"b": 2}),
             ]
         )
-        batch_operation = BatchOperation(batch_size=2)
+        batch_operation: BatchOperation[dict[str, int]] = BatchOperation(batch_size=2)
         with np.testing.assert_raises_regex(
             TypeError,
             re.escape(
@@ -375,7 +391,7 @@ class OperationsTest(parameterized.TestCase):
         ):
             list(batch_operation(input_data))
 
-    def test_batch_unsupported_type(self):
+    def test_batch_unsupported_type(self) -> None:
         """Test batch unsupported type."""
 
         @dataclasses.dataclass
@@ -386,16 +402,12 @@ class OperationsTest(parameterized.TestCase):
 
         input_data = iter(
             [
-                record.Record(
-                    record.RecordMetadata(index=0, record_key=4), UnSupportedType(1)
-                ),
-                record.Record(
-                    record.RecordMetadata(index=1, record_key=3), UnSupportedType(2)
-                ),
+                record.Record(record.RecordMetadata(index=0, record_key=4), UnSupportedType(1)),
+                record.Record(record.RecordMetadata(index=1, record_key=3), UnSupportedType(2)),
             ]
         )
-        batch_operation = BatchOperation(batch_size=2)
-        expected_output_data = [
+        batch_operation: BatchOperation[UnSupportedType] = BatchOperation(batch_size=2)
+        expected_output_data: list[record.Record[ElementTree]] = [
             record.Record(
                 record.RecordMetadata(index=1, record_key=None),
                 np.array([UnSupportedType(1), UnSupportedType(2)]),
@@ -404,8 +416,20 @@ class OperationsTest(parameterized.TestCase):
         actual_output_data = list(batch_operation(input_data))
         self.compare_output(actual_output_data, expected_output_data)
 
-    def test_batch_with_custom_batch_fn(self):
+    def test_batch_with_custom_batch_fn(self) -> None:
         """Test batch with custom batch fn."""
+
+        def _custom_list_batch(xs: Sequence[int]) -> list[int]:
+            """Convert sequence ``xs`` into a list.
+
+            Args:
+                xs (Sequence[int]): Input integer sequence.
+
+            Returns:
+                list[int]: List copy of ``xs``.
+            """
+            return list(xs)
+
         input_data = iter(
             [
                 record.Record(record.RecordMetadata(index=0, record_key=3), 1),
@@ -414,8 +438,8 @@ class OperationsTest(parameterized.TestCase):
                 record.Record(record.RecordMetadata(index=3, record_key=0), 4),
             ]
         )
-        batch_operation = BatchOperation(batch_size=2, batch_fn=lambda x: x)
-        expected_output_data = [
+        batch_operation: BatchOperation[int] = BatchOperation(batch_size=2, batch_fn=_custom_list_batch)
+        expected_output_data: list[record.Record[ElementTree]] = [
             record.Record(record.RecordMetadata(index=1, record_key=None), [1, 2]),
             record.Record(record.RecordMetadata(index=3, record_key=None), [3, 4]),
         ]

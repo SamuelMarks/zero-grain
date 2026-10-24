@@ -1,134 +1,90 @@
+#!/usr/bin/env python3
+"""Script to check semantic plan and module compliance for zero-grain."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+import importlib
+from pathlib import Path
 import re
 import sys
-import importlib
-import os
 
 
-def main():
-    if not os.path.exists("SEMANTIC_PLAN.md"):
-        print("SEMANTIC_PLAN.md not found, skipping compliance check.")
-        sys.exit(0)
+def check_plan(plan_path: Path = Path("SEMANTIC_PLAN.md"), *, fix: bool = False) -> int:
+    """Validate that all APIs listed in ``plan_path`` are importable and checked off.
 
-    with open("SEMANTIC_PLAN.md", "r") as f:
-        content = f.read()
+    Args:
+        plan_path (Path): Path to the markdown plan file.
+        fix (bool): Whether to rewrite checkbox statuses in ``plan_path`` on disk.
 
-    modules = {}
-    current_module = None
+    Returns:
+        int: Zero if all APIs are implemented or ``plan_path`` is absent, else 1.
+    """
+    if not plan_path.exists():
+        print(f"{plan_path} not found, skipping compliance check.")
+        return 0
 
-    for line in content.splitlines():
-        m_mod = re.search(r"`([a-zA-Z0-9_\.]+)`", line)
-        if line.startswith("## ") and m_mod:
-            raw_mod = m_mod.group(1)
-            prefix = raw_mod.split(".")[0]
-            current_module = raw_mod.replace(prefix, "zero_grain", 1)
-            if current_module not in modules:
-                modules[current_module] = []
-            continue
-        elif line.startswith("## ") and not current_module:
-            current_module = "zero_grain"
-            if current_module not in modules:
-                modules[current_module] = []
-            continue
-
-        if current_module:
-            # We strictly enforce that APIs must be formatted as:
-            # - [x] `func_name`
-            # OR
-            # - [ ] `func_name`
-            # with possible backticks and a potential description afterwards
-            m_item = re.match(r"^- \[[xX ]\] `?([a-zA-Z0-9_]+)`?(?:[: ].*)?", line)
-
-            if m_item:
-                funcs_part = m_item.group(1)
-                funcs = [f.strip(" `") for f in funcs_part.split("/")]
-
-                # Further filter out pseudo-tasks that don't match python identifier patterns
-                for fn in funcs:
-                    if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", fn):
-                        modules[current_module].append(fn)
-
-    missing = []
+    lines = plan_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    new_lines: list[str] = []
+    current_module: str | None = None
     total = 0
     implemented = 0
 
-    if not modules or all(len(funcs) == 0 for funcs in modules.values()):
-        print("No parsable API targets found in SEMANTIC_PLAN.md")
-        sys.exit(0)
-
-    for mod_name, funcs in modules.items():
-        if not funcs:
-            continue
-        try:
-            mod = importlib.import_module(mod_name)
-        except ImportError:
-            missing.extend([f"{mod_name}.{f}" for f in funcs])
-            total += len(funcs)
+    for line in lines:
+        mod_match = re.match(r"^## `(zero_[a-zA-Z0-9_.]+)`", line)
+        if mod_match:
+            current_module = mod_match.group(1)
+            new_lines.append(line)
             continue
 
-        for f_name in funcs:
-            f_name = f_name.strip()
-            if not f_name:
-                continue
+        item_match = re.match(r"^- \[([ xX])\] `([a-zA-Z0-9_]+)`", line)
+        if item_match and current_module is not None:
+            api_name = item_match.group(2)
             total += 1
-            if hasattr(mod, f_name):
+            is_impl = False
+            try:
+                mod = importlib.import_module(current_module)
+                if api_name in dir(mod):
+                    is_impl = True
+            except Exception:
+                is_impl = False
+
+            if is_impl:
                 implemented += 1
+                new_lines.append(f"- [x] `{api_name}`" + chr(10))
             else:
-                missing.append(f"{mod_name}.{f_name}")
+                new_lines.append(f"- [ ] `{api_name}`" + chr(10))
+        else:
+            new_lines.append(line)
 
-    pct = (implemented / total) * 100 if total > 0 else 100.0
+    new_content = "".join(new_lines)
+    old_content = "".join(lines)
+    if fix and new_content != old_content:
+        plan_path.write_text(new_content, encoding="utf-8")
 
-    current_todo = ""
-    try:
-        with open("GRAIN_TODO.md", "r") as f:
-            current_todo = f.read()
-    except FileNotFoundError:
-        pass
+    if total > 0 and implemented < total:
+        print(f"Compliance Check Failed: {implemented}/{total} APIs implemented.")
+        return 1
 
-    new_todo_lines = [
-        "# GRAIN_TODO.md",
-        "--- Compliance Report ---",
-        f"Overall Compliance: {pct:.1f}%\n",
-        "Breakdown by Module:",
-    ]
-    for mod_name, funcs in modules.items():
-        if not funcs:
-            continue
-        prefix = "GRAIN_TODO.md".split("_")[0].lower()
-        orig_mod_name = mod_name.replace("zero_grain", prefix)
-        mod_implemented = sum(
-            1 for f_name in funcs if f"{mod_name}.{f_name}" not in missing
-        )
-        mod_pct = (mod_implemented / len(funcs)) * 100 if funcs else 100.0
-        new_todo_lines.append(
-            f"  - {orig_mod_name}: {mod_pct:.1f}% ({mod_implemented}/{len(funcs)})"
-        )
+    print(f"Compliance Check Passed! 100% compliant ({implemented}/{total} APIs).")
+    return 0
 
-    if missing:
-        new_todo_lines.append("\nMissing APIs:")
-        for m in missing:
-            new_todo_lines.append(f"  - {m}")
 
-    new_todo = "\n".join(new_todo_lines) + "\n"
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entry point for semantic compliance verification.
 
-    if new_todo != current_todo:
-        with open("GRAIN_TODO.md", "w") as f:
-            f.write(new_todo)
-        print("Updated GRAIN_TODO.md.")
+    Args:
+        argv (Sequence[str] | None): Optional CLI arguments specifying ``[--fix] [plan_path]``.
 
-    if missing:
-        print(
-            "COMPLIANCE FAILURE: The following expected APIs are missing or not exported:"
-        )
-        for m in missing:
-            print(f"  - {m}")
-        print(f"\nOverall Compliance: {pct:.1f}% ({implemented}/{total})")
-        sys.exit(1)
-    else:
-        print(f"Compliance Check Passed! 100% compliant ({implemented}/{total} APIs).")
-        if new_todo != current_todo:
-            sys.exit(1)
-        sys.exit(0)
+    Returns:
+        int: Exit status code.
+    """
+    args = list(argv) if argv is not None else sys.argv[1:]
+    fix = "--fix" in args
+    filtered = [a for a in args if a != "--fix"]
+    target = Path(filtered[0]) if filtered else Path("SEMANTIC_PLAN.md")
+    return check_plan(target, fix=fix)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

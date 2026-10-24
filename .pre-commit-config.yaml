@@ -3,61 +3,76 @@ repos:
     hooks:
       - id: ruff-format
         name: Ruff Format
-        entry: ruff format .
+        entry: ruff format --check .
         language: system
         types: [python]
         pass_filenames: false
 
       - id: ruff-check
-        name: Ruff Check (Fix)
-        entry: ruff check --fix .
+        name: Ruff Check
+        entry: ruff check .
         language: system
         types: [python]
         pass_filenames: false
 
-      - id: pytest-coverage
-        name: Run Pytest Coverage
-        entry: bash -c 'PYTHONPATH=src pytest --cov=src --cov-branch --cov-report=term-missing --cov-fail-under=100'
+      - id: mypy
+        name: Mypy Strict Type Check
+        entry: mypy src scripts tests
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: interrogate
+        name: Interrogate Docstring Coverage (100%)
+        entry: interrogate -vv -f 100 src scripts tests
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: check-docstrings
+        name: AST Docstring Check (Args & Returns)
+        entry: python3 scripts/check_docstrings.py src scripts tests
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: check-typing-discipline
+        name: AST Typing Discipline Check
+        entry: python3 scripts/check_typing_discipline.py src scripts tests
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: check-test-completeness
+        name: Check Exported API Test Completeness
+        entry: python3 scripts/check_test_completeness.py
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: check-deps
+        name: Check Zero Runtime Dependencies (src/)
+        entry: python3 scripts/check_deps.py src
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: check-compliance
+        name: Check API Snapshot Compliance
+        entry: python3 scripts/calc_compliance.py
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: pytest-cov
+        name: Pytest (100% Line & Branch Coverage)
+        entry: pytest --cov=src --cov=scripts --cov-branch --cov-report=term-missing --cov-fail-under=100
         language: system
         types: [python]
         pass_filenames: false
 
       - id: update-badges
-        name: Update Coverage Shields
+        name: Update README Badges
         entry: python3 scripts/update_badges.py
         language: system
-        types: [python]
         pass_filenames: false
-
-      - id: calc-compliance
-        name: Check API Parity against Snapshots
-        entry: python3 scripts/calc_compliance.py
-        language: system
-        pass_filenames: false
-
-      - id: check-test-completeness
-        name: Check Test Completeness
-        entry: python3 scripts/check_test_completeness.py
-        language: system
-        pass_filenames: false
-
-      - id: check-api-compliance
-        name: Check API Conformance
-        entry: env PYTHONPATH=src:../ml-switcheroo-compiler/src python3 scripts/check_compliance.py
-        language: system
-        files: ^(SEMANTIC_PLAN\.md|src/.*\.py)$
-        pass_filenames: false
-
-      - id: build
-        name: Build Package
-        entry: python3 -m build
-        language: system
-        pass_filenames: false
-
-      - id: check-deps
-        name: Check Dependencies (src/)
-        entry: python3 scripts/check_deps.py
-        language: system
-        types: [python]
-        pass_filenames: false
-

@@ -1,86 +1,59 @@
-"""Module docstring."""
+"""Official Grain tests for ``RangeDataSource``, ``SharedMemoryDataSource``, and ``ArrayRecordDataSource``."""
 
 from __future__ import annotations
 
-# Copyright 2023 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""Tests for data sources."""
-
 from collections.abc import Sequence
-import dataclasses
+import multiprocessing as grain_multiprocessing
 import pathlib
-import pickle
 import platform
-import random
-from typing import Any
-from unittest import mock
 
 from absl import flags
 from absl.testing import absltest
 from absl.testing import parameterized
-from etils import epath
-import multiprocessing as grain_multiprocessing
 from zero_grain import python as data_sources
 from zero_grain import python as dataset_base
 
 FLAGS = flags.FLAGS
 
 
-@dataclasses.dataclass
-class DummyFileInstruction:
-    """Dummy file instruction."""
-
-    filename: str
-    skip: int
-    take: int
-    examples_in_shard: int
-
-
 class DataSourceTest(parameterized.TestCase):
-    """Test class for data source."""
+    """Base test class for data sources."""
 
-    def setUp(self):
-        """Set up the test environment."""
+    def setUp(self) -> None:
+        """Set up the test directory path."""
         super().setUp()
         self.testdata_dir = pathlib.Path(".")
 
 
 class RangeDataSourceTest(DataSourceTest):
-    """Test class."""
+    """Test suite for ``RangeDataSource``."""
 
     @parameterized.parameters(
         [
-            (0, 10, 2),  # Positive step
-            (10, 0, -2),  # Negative step
-            (0, 0, 1),  # Empty Range
+            (0, 10, 2),
+            (10, 0, -2),
+            (0, 0, 1),
         ]
     )
-    def test_range_data_source(self, start, stop, step):
-        """Test range data source."""
-        expected_output = list(range(start, stop, step))
+    def test_range_data_source(self, start: int, stop: int, step: int) -> None:
+        """Verify ``RangeDataSource`` matches Python ``range(start, stop, step)``.
 
+        Args:
+            start (int): Range start value.
+            stop (int): Range stop value.
+            step (int): Range step value.
+        """
+        expected_output = list(range(start, stop, step))
         range_ds = data_sources.RangeDataSource(start, stop, step)
         actual_output = [range_ds[i] for i in range(len(range_ds))]
-
         self.assertEqual(expected_output, actual_output)
 
 
 class InMemoryDataSourceTest(DataSourceTest):
-    """Test class for in memory data source."""
+    """Test suite for ``SharedMemoryDataSource``."""
 
-    def test_single_process(self):
-        """Test single process."""
+    def test_single_process(self) -> None:
+        """Verify single-process indexing and iteration."""
         sequence = list(range(12))
         in_memory_ds = data_sources.SharedMemoryDataSource(sequence)
 
@@ -95,32 +68,28 @@ class InMemoryDataSourceTest(DataSourceTest):
 
     @staticmethod
     def read_elements(
-        in_memory_ds: data_sources.SharedMemoryDataSource, indices: Sequence[int]
-    ) -> Sequence[Any]:
-        """Read elements from the data source.
+        in_memory_ds: data_sources.SharedMemoryDataSource[int],
+        indices: Sequence[int],
+    ) -> Sequence[int]:
+        """Read elements at ``indices`` from ``in_memory_ds``.
+
+        Args:
+            in_memory_ds (data_sources.SharedMemoryDataSource[int]): Shared data source.
+            indices (Sequence[int]): Indices to read.
 
         Returns:
-            The return value.
-
+            Sequence[int]: List of elements at ``indices``.
         """
-        res = [in_memory_ds[i] for i in indices]
-        return res
+        return [in_memory_ds[i] for i in indices]
 
-    def test_multi_processes_co_read(self):
-        """Test multi processes co read."""
+    def test_multi_processes_co_read(self) -> None:
+        """Verify concurrent reads across spawned worker processes."""
         sequence = list(range(12))
-        in_memory_ds = data_sources.SharedMemoryDataSource(
-            sequence, name="DataSourceTestingCoRead"
-        )
+        in_memory_ds = data_sources.SharedMemoryDataSource(sequence, name="DataSourceTestingCoRead")
 
         num_processes = 3
         indices_for_processes = [[1, 3, 5], [2, 3, 4], [5, 2, 3]]
-        expected_elements_read = list(
-            map(
-                lambda indices: [in_memory_ds[i] for i in indices],
-                indices_for_processes,
-            )
-        )
+        expected_elements_read = [[in_memory_ds[i] for i in indices] for indices in indices_for_processes]
 
         mp_context = grain_multiprocessing.get_context("spawn")
         with mp_context.Pool(processes=num_processes) as pool:
@@ -128,7 +97,6 @@ class InMemoryDataSourceTest(DataSourceTest):
                 InMemoryDataSourceTest.read_elements,
                 zip([in_memory_ds] * num_processes, indices_for_processes),
             )
-
             pool.close()
             pool.join()
 
@@ -137,16 +105,16 @@ class InMemoryDataSourceTest(DataSourceTest):
         in_memory_ds.close()
         in_memory_ds.unlink()
 
-    def test_empty_sequence(self):
-        """Test empty sequence."""
-        in_memory_ds = data_sources.SharedMemoryDataSource([])
+    def test_empty_sequence(self) -> None:
+        """Verify ``SharedMemoryDataSource([])`` is empty."""
+        in_memory_ds: data_sources.SharedMemoryDataSource[int] = data_sources.SharedMemoryDataSource([])
         self.assertEmpty(in_memory_ds)
 
         in_memory_ds.close()
         in_memory_ds.unlink()
 
-    def test_str(self):
-        """Test str."""
+    def test_str(self) -> None:
+        """Verify ``SharedMemoryDataSource.__str__`` output."""
         sequence = list(range(12))
         name = "DataSourceTestingStr"
         in_memory_ds = data_sources.SharedMemoryDataSource(sequence, name=name)
@@ -160,22 +128,30 @@ class InMemoryDataSourceTest(DataSourceTest):
         in_memory_ds.unlink()
 
 
-@absltest.skipIf(
-    platform.system() == "Windows", "ArrayRecord isn't supported on Windows."
-)
+@absltest.skipIf(platform.system() == "Windows", "ArrayRecord isn't supported on Windows.")
 class ArrayRecordDataSourceTest(DataSourceTest):
-    """Test class for array record data source."""
+    """Test suite for ``ArrayRecordDataSource``."""
 
-    def test_array_record_data_implements_random_access(self):
-        """Test array record data implements random access."""
-        assert issubclass(
-            data_sources.ArrayRecordDataSource, dataset_base.RandomAccessDataSource
-        )
+    def test_array_record_data_implements_random_access(self) -> None:
+        """Verify ``ArrayRecordDataSource`` is a ``RandomAccessDataSource`` subclass."""
+        assert issubclass(data_sources.ArrayRecordDataSource, dataset_base.RandomAccessDataSource)
 
-    def test_array_record_source_empty_sequence(self):
-        """Test array record source empty sequence."""
+    def test_array_record_source_empty_sequence(self) -> None:
+        """Verify ``ArrayRecordDataSource([])`` raises ``ValueError``."""
         with self.assertRaises(ValueError):
             data_sources.ArrayRecordDataSource([])
+
+    def test_array_record_file_instructions_and_bounds(self) -> None:
+        """Verify ``FileInstruction`` skip/take windowing and out-of-bounds ``IndexError``."""
+        inst1 = data_sources.FileInstruction(filename="shard_0", skip=1, take=3, examples_in_shard=5)
+        inst2 = data_sources.FileInstruction(filename="shard_1", skip=2, take=-1, examples_in_shard=5)
+        ar_ds = data_sources.ArrayRecordDataSource([inst1, inst2])
+        self.assertEqual(len(ar_ds), 6)
+        self.assertEqual([ar_ds[i] for i in range(len(ar_ds))], [b"1", b"2", b"3", b"5", b"6", b"7"])
+        with self.assertRaises(IndexError):
+            _ = ar_ds[-1]
+        with self.assertRaises(IndexError):
+            _ = ar_ds[6]
 
 
 if __name__ == "__main__":

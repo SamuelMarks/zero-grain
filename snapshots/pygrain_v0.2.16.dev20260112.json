@@ -2,794 +2,1304 @@
   "categories": {
     "extras": [
       {
+        "aliases": [],
         "api_path": "grain.python.ArrayRecordDataSource",
-        "docstring": "Data source for ArrayRecord files.",
+        "docstring": "Random-access data source for reading records from ArrayRecord files.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "ArrayRecordDataSource",
+        "overloads": [],
         "params": [
           {
-            "annotation": "str | os.PathLike | array_record.python.array_record_data_source.FileInstruction | collections.abc.Sequence[str | os.PathLike | array_record.python.array_record_data_source.FileInstruction]",
-            "default": null,
+            "annotation": "str | os.PathLike[str] | FileInstruction | Sequence[str | os.PathLike[str] | FileInstruction] | None",
+            "default": "'```(None)```'",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "paths"
           },
           {
             "annotation": "dict[str, str] | None",
-            "default": "None",
+            "default": "'```(None)```'",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "reader_options"
           }
-        ]
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.Batch",
-        "docstring": "Batch(batch_size: 'int', drop_remainder: 'bool' = False, batch_fn: 'Callable[[Sequence[Any]], Any] | None' = None)",
+        "docstring": "Transformation specification that batches consecutive elements together.\n\nAttributes:\n    batch_size (int): Number of elements per batch.\n    drop_remainder (bool): Whether to drop a final batch smaller than ``batch_size``.\n    batch_fn (Callable[[Sequence[T_in]], T_out] | None): Optional custom collation function.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "Batch",
+        "overloads": [],
         "params": [
           {
             "annotation": "int",
-            "default": null,
+            "default": "1",
+            "description": "Number of elements to combine per batch (must be ``> 0``).",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "batch_size"
           },
           {
             "annotation": "bool",
             "default": "False",
+            "description": "Whether to drop trailing incomplete batches.",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "drop_remainder"
           },
           {
-            "annotation": "collections.abc.Callable[[collections.abc.Sequence[Any]], Any] | None",
-            "default": "None",
+            "annotation": "Callable[[Sequence[T_in]], T_out] | None",
+            "default": "'```(None)```'",
+            "description": "Custom batching callable.",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "batch_fn"
           }
-        ]
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.BatchOperation",
-        "docstring": "Batches input examples into batches with given batch_size.\n\nInternally, examples are interpreted as JAX Pytrees. To batch records\ntogether, they must be of the same structure. Corresponding leaves are batched\ntogether into NumPy arrays. For more info about PyTrees, please refer to:\nhttps://jax.readthedocs.io/en/latest/pytrees.html.\n\nBy default, we put Numpy arrays into Shared Memory. For more info about shared\nmemory, please refer to:\nhttps://docs.python.org/3/library/multiprocessing.shared_memory.html",
+        "docstring": "Operation collating consecutive records into batches of size ``batch_size``.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "BatchOperation",
+        "overloads": [],
         "params": [
           {
             "annotation": "int",
-            "default": null,
+            "default": "1",
+            "description": "Number of records per batch (must be ``> 0``).",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "batch_size"
           },
           {
             "annotation": "bool",
             "default": "False",
+            "description": "Whether to drop incomplete final batches.",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "drop_remainder"
           },
           {
-            "annotation": "Callable[[Sequence[~_IN]], ~_OUT] | None",
-            "default": "None",
+            "annotation": "Callable[[Sequence[T_in]], T_out] | None",
+            "default": "'```(None)```'",
+            "description": "Custom batching callable.",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "batch_fn"
           }
-        ]
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.PyGrainCheckpointHandler",
-        "docstring": "Orbax CheckpointHandler for PyGrain iterators.",
+        "docstring": "CheckpointHandler saving and restoring ``DataLoaderIterator`` states as JSON.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": true,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "CheckpointHandler",
+        "overloads": [],
         "params": [
           {
-            "annotation": null,
-            "default": null,
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
             "kind": "VAR_POSITIONAL",
             "name": "args"
           },
           {
-            "annotation": null,
-            "default": null,
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
             "kind": "VAR_KEYWORD",
             "name": "kwargs"
           }
-        ]
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.DataLoader",
-        "docstring": "DataLoader loads and transforms input data.",
+        "docstring": "Composable data loader applying a ``Sampler`` and ``operations`` over a ``data_source``.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "DataLoader",
+        "overloads": [],
         "params": [
           {
-            "annotation": "grain._src.python.data_sources.RandomAccessDataSource",
-            "default": null,
-            "kind": "KEYWORD_ONLY",
+            "annotation": "RandomAccessDataSource[T_co] | Sequence[T_co] | None",
+            "default": "'```(None)```'",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
             "name": "data_source"
           },
           {
-            "annotation": "grain._src.python.samplers.Sampler",
-            "default": null,
-            "kind": "KEYWORD_ONLY",
+            "annotation": "Sampler | Sequence[int] | None",
+            "default": "'```(None)```'",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
             "name": "sampler"
           },
           {
-            "annotation": "Sequence[grain._src.core.transforms.Batch | grain._src.core.transforms.MapTransform | grain._src.core.transforms.RandomMapTransform | grain._src.core.transforms.TfRandomMapTransform | grain._src.core.transforms.Filter | grain._src.core.transforms.FlatMapTransform | grain._src.core.transforms.MapWithIndex | grain._src.python.operations.Operation]",
-            "default": "()",
-            "kind": "KEYWORD_ONLY",
+            "annotation": "Sequence[TransformationSpec]",
+            "is_mandatory": true,
+            "kind": "POSITIONAL_OR_KEYWORD",
             "name": "operations"
           },
           {
             "annotation": "int | None",
-            "default": "0",
-            "kind": "KEYWORD_ONLY",
+            "is_mandatory": true,
+            "kind": "POSITIONAL_OR_KEYWORD",
             "name": "worker_count"
           },
           {
             "annotation": "int",
-            "default": "1",
-            "kind": "KEYWORD_ONLY",
+            "is_mandatory": true,
+            "kind": "POSITIONAL_OR_KEYWORD",
             "name": "worker_buffer_size"
           },
           {
-            "annotation": "grain._src.core.sharding.ShardOptions | None",
-            "default": "None",
-            "kind": "KEYWORD_ONLY",
+            "annotation": "ShardOptions | None",
+            "is_mandatory": true,
+            "kind": "POSITIONAL_OR_KEYWORD",
             "name": "shard_options"
           },
           {
-            "annotation": "grain._src.python.options.ReadOptions | None",
-            "default": "None",
-            "kind": "KEYWORD_ONLY",
+            "annotation": "ReadOptions | None",
+            "is_mandatory": true,
+            "kind": "POSITIONAL_OR_KEYWORD",
             "name": "read_options"
           },
           {
             "annotation": "bool",
-            "default": "False",
-            "kind": "KEYWORD_ONLY",
+            "is_mandatory": true,
+            "kind": "POSITIONAL_OR_KEYWORD",
             "name": "enable_profiling"
+          },
+          {
+            "annotation": "DataLoaderOptions | None",
+            "is_mandatory": true,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "options"
           }
-        ]
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.PyGrainDatasetIterator",
-        "docstring": "DataLoader iterator providing get/set state functionality.\n\nThis is the only iterator we expose to users. It wraps underlying\nMultipleProcessIterator. In order to set state, it recreates the underlying\niterator fresh with a new state.\n\nCheckpointing for DataLoaderIterator:\nDataLoaderIterator uses GrainPool, which distributes RecordMetadata from\nproduced records among worker processes in a round robin fashion. Generally,\nsome workers can process more elements than others at a given training step.\nCheckpointing logic goes as follows:\n1) With each output batch produced, GrainPool emits the worker_index of The\n   worker that processed the batch.\n2) DataLoaderIterator keeps track of the last_seen_index at each worker.\n3) When restoring from a state, DataLoaderIterator checks what is the\n   minimum last_seen_index (among the last seen indices for all workers.) and\n   which worker processed that index. GrainPool is instructed to start\n   distributing indices to the next worker.",
+        "docstring": "Stateful, checkpointable iterator over a ``DataLoader``.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "DataLoaderIterator",
+        "overloads": [],
         "params": [
           {
-            "annotation": "grain._src.python.data_loader.DataLoader",
-            "default": null,
+            "annotation": "DataLoader[T_co] | None",
+            "default": "'```(None)```'",
+            "description": "Parent ``DataLoader`` to iterate.",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "data_loader"
           },
           {
-            "annotation": "dict[str, Any] | None",
-            "default": null,
+            "annotation": "CheckpointStateDict | None | None",
+            "default": "'```(None)```'",
+            "description": "Optional initial checkpoint state to restore.",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "state"
           },
           {
             "annotation": "bool",
             "default": "True",
+            "description": "Whether to validate ``state`` on restoration.",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "validate_state"
           }
-        ]
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.DatasetIterator",
-        "docstring": "``IterDataset`` iterator.\n\nNOTE: The methods are assumed to be thread-unsafe. Please ensure only a single\nthread can access a ``DatasetIterator`` instance.",
+        "docstring": "Stateful iterator over an ``IterDataset``.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "DatasetIterator",
+        "overloads": [],
         "params": [
           {
-            "annotation": "grain._src.python.dataset.dataset.DatasetIterator | collections.abc.Sequence[grain._src.python.dataset.dataset.DatasetIterator]",
+            "annotation": "DatasetIterator[T_co] | IterDataset[T_co] | Sequence[DatasetIterator[T_co]]",
             "default": "()",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "parents"
           }
-        ]
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.DatasetSelectionMap",
-        "docstring": "Map from index to (constituent dataset index, index within dataset).\n\nNote, this must be stateless, picklable and should avoid randomness to\nsupport determinism since it may be created and called concurrently in\nmultiple processes.",
+        "docstring": "Selection map mapping dataset indices across mixed or interleaved datasets.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": true,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "DatasetSelectionMap",
+        "overloads": [],
         "params": [
           {
-            "annotation": null,
-            "default": null,
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
             "kind": "VAR_POSITIONAL",
             "name": "args"
           },
           {
-            "annotation": null,
-            "default": null,
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
             "kind": "VAR_KEYWORD",
             "name": "kwargs"
           }
-        ]
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.FilterTransform",
-        "docstring": "Abstract base class for filter transformations for individual elements.\n\nThe pipeline will drop any element for which the filter function returns\nFalse.\n\nImplementations should be threadsafe since they are often executed in\nparallel.",
+        "docstring": "Base class for predicate filter transformations.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": true,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "Filter",
+        "overloads": [],
         "params": [
           {
-            "annotation": null,
-            "default": null,
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
             "kind": "VAR_POSITIONAL",
             "name": "args"
           },
           {
-            "annotation": null,
-            "default": null,
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
             "kind": "VAR_KEYWORD",
             "name": "kwargs"
           }
-        ]
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.FilterOperation",
-        "docstring": "Yields records from input iterator satisfying user-provided condition.",
+        "docstring": "Operation filtering records based on a predicate callable or ``FilterTransform``.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "FilterOperation",
+        "overloads": [],
         "params": [
           {
-            "annotation": "Callable[[~_IN], bool]",
-            "default": null,
+            "annotation": "Callable[[T_in], bool] | FilterTransform[T_in] | None",
+            "default": "'```(None)```'",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "condition_function"
           }
-        ]
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.IndexSampler",
-        "docstring": "Base index sampler for training on a single datasource.\n\nThis index sampler supports the following operations:\n- Sharding of the dataset.\n- Global shuffle of the dataset.",
+        "docstring": "Sampler supporting multi-epoch iteration, sharding, and seeded shuffling.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "IndexSampler",
+        "overloads": [],
         "params": [
           {
             "annotation": "int",
-            "default": null,
+            "default": "1",
+            "description": "Number of records in a single epoch (must be ``> 0``).",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "num_records"
           },
           {
-            "annotation": "grain._src.core.sharding.ShardOptions",
-            "default": "NoSharding(shard_index=0, shard_count=1, drop_remainder=False)",
+            "default": "'```(_DEFAULT_NO_SHARDING)```'",
+            "description": "Sharding configuration.",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "shard_options"
           },
           {
             "annotation": "bool",
             "default": "False",
+            "description": "Whether to shuffle record keys within each epoch.",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "shuffle"
           },
           {
             "annotation": "int | None",
-            "default": "None",
+            "default": "'```(None)```'",
+            "description": "Optional number of epochs (None for effectively infinite/1 epoch).",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "num_epochs"
           },
           {
             "annotation": "int | None",
-            "default": "None",
+            "default": "'```(None)```'",
+            "description": "Integer seed in ``[0, 2**32)`` used for shuffling and RNG derivation.",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "seed"
           }
-        ]
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.IterDataset",
-        "docstring": "Represents a dataset with transformations that support Iterable interface.\n\nTransformations do not mutate the dataset object. Instead, they return a new\ndataset. ``IterDataset`` is immutable.",
+        "docstring": "Iterable dataset supporting streaming transformations and checkpointing.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "IterDataset",
+        "overloads": [],
         "params": [
           {
-            "annotation": "grain._src.python.dataset.dataset.MapDataset | grain._src.python.dataset.dataset.IterDataset | collections.abc.Sequence[grain._src.python.dataset.dataset.MapDataset | grain._src.python.dataset.dataset.IterDataset]",
+            "annotation": "MapDataset[T_co] | IterDataset[T_co] | Sequence[MapDataset[T_co] | IterDataset[T_co]]",
             "default": "()",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "parents"
           }
-        ]
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.MapDataset",
-        "docstring": "Represents a dataset with transformations that support random access.\n\nTransformations do not mutate the dataset object. Instead, they return a new\ndataset. ``MapDataset`` is immutable.\n\nNOTE:\n  ``MapDataset`` transformations such as ``.filter()`` use ``None`` to\n  indicate absence of an element. Generally, the implementation of\n  ``MapDataset`` transformations already handle `None` as a special case\n  (e.g. by returning ``None`` as soon as ``__getitem__`` sees ``None``). This\n  means the user-defined functions passed to the ``MapDataset``\n  transformations do not need to explicitly handle ``None`` s.",
+        "docstring": "Random-access dataset supporting functional transformations.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "MapDataset",
+        "overloads": [],
         "params": [
           {
-            "annotation": "grain._src.python.dataset.dataset.MapDataset | collections.abc.Sequence[grain._src.python.dataset.dataset.MapDataset]",
+            "annotation": "MapDataset[T_co] | RandomAccessDataSource[T_co] | Sequence[T_co] | Sequence[MapDataset[T_co]]",
             "default": "()",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "parents"
           }
-        ]
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.MapOperation",
-        "docstring": "Applies user-provided map_function to input records.",
+        "docstring": "Operation applying a deterministic function or ``MapTransform`` to each record.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "MapOperation",
+        "overloads": [],
         "params": [
           {
-            "annotation": "Callable[[~_IN], ~_OUT]",
-            "default": null,
+            "annotation": "Callable[[T_in], T_out] | MapTransform[T_in, T_out] | None",
+            "default": "'```(None)```'",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "map_function"
           }
-        ]
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.MapTransform",
-        "docstring": "Abstract base class for all 1:1 transformations of elements.\n\nImplementations should be threadsafe since they are often executed in\nparallel.",
+        "docstring": "Base class for deterministic element-wise map transformations.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": true,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "MapTransform",
+        "overloads": [],
         "params": [
           {
-            "annotation": null,
-            "default": null,
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
             "kind": "VAR_POSITIONAL",
             "name": "args"
           },
           {
-            "annotation": null,
-            "default": null,
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
             "kind": "VAR_KEYWORD",
             "name": "kwargs"
           }
-        ]
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.MapWithIndexTransform",
-        "docstring": "Abstract base class for 1:1 transformations of elements and their index.\n\nImplementations should be threadsafe since they are often executed in\nparallel.",
+        "docstring": "Base class for deterministic element-wise transformations receiving record indices.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": true,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "MapWithIndex",
+        "overloads": [],
         "params": [
           {
-            "annotation": null,
-            "default": null,
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
             "kind": "VAR_POSITIONAL",
             "name": "args"
           },
           {
-            "annotation": null,
-            "default": null,
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
             "kind": "VAR_KEYWORD",
             "name": "kwargs"
           }
-        ]
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.MultiprocessingOptions",
-        "docstring": "Options for using Python multiprocessing.\n\nAttributes:\n  num_workers: Number of Python worker processes. More processes can speed up\n    the pipeline if it's compute bound and bottlenecked on the CPython's GIL.\n    The default value of 0 means no Python multiprocessing, and as a result\n    all data loading and transformation will run in the main Python process.\n  per_worker_buffer_size: Size of the buffer for preprocessed elements that\n    each worker maintains. These are elements after all transformations. If\n    your transformations include batching this means a single element is a\n    batch.\n  enable_profiling: If True, profiling info is logged. This is only available\n    when num_workers >= 1.",
+        "docstring": "Options configuring worker processes for parallel pipeline execution.\n\nAttributes:\n    num_workers (int): Number of child worker processes.\n    per_worker_buffer_size (int): Output buffer size per worker.\n    enable_profiling (bool): Whether worker profiling is enabled.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "MultiprocessingOptions",
+        "overloads": [],
         "params": [
           {
             "annotation": "int",
             "default": "0",
+            "description": "Number of worker processes (must be ``>= 0``).",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "num_workers"
           },
           {
             "annotation": "int",
             "default": "1",
+            "description": "Buffer size per worker (must be ``>= 1``).",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "per_worker_buffer_size"
           },
           {
             "annotation": "bool",
             "default": "False",
+            "description": "Whether to profile worker execution.",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "enable_profiling"
           }
-        ]
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.NoSharding",
-        "docstring": "Doesn't shard data. Each process will load all data.",
+        "docstring": "Default ``ShardOptions`` subclass representing a single unsharded process.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
         "name": "NoSharding",
-        "params": []
-      },
-      {
-        "api_path": "grain.python.Operation",
-        "docstring": "Base class for protocol classes.\n\nProtocol classes are defined as::\n\n    class Proto(Protocol):\n        def meth(self) -> int:\n            ...\n\nSuch classes are primarily used with static type checkers that recognize\nstructural subtyping (static duck-typing).\n\nFor example::\n\n    class C:\n        def meth(self) -> int:\n            return 0\n\n    def func(x: Proto) -> int:\n        return x.meth()\n\n    func(C())  # Passes static type check\n\nSee PEP 544 for details. Protocol classes decorated with\n@typing.runtime_checkable act as simple-minded runtime protocols that check\nonly the presence of given attributes, ignoring their type signatures.\nProtocol classes can be generic, they are defined as::\n\n    class GenProto(Protocol[T]):\n        def meth(self) -> T:\n            ...",
-        "has_varargs": true,
-        "kind": "class",
-        "name": "Operation",
-        "params": [
-          {
-            "annotation": null,
-            "default": null,
-            "kind": "VAR_POSITIONAL",
-            "name": "args"
-          },
-          {
-            "annotation": null,
-            "default": null,
-            "kind": "VAR_KEYWORD",
-            "name": "kwargs"
-          }
-        ]
-      },
-      {
-        "api_path": "grain.python.RandomAccessDataSource",
-        "docstring": "Interface for datasources where storage supports efficient random access.\n\nNote that `__repr__` has to be additionally implemented to make checkpointing\nwork with this source.",
-        "has_varargs": true,
-        "kind": "class",
-        "name": "RandomAccessDataSource",
-        "params": [
-          {
-            "annotation": null,
-            "default": null,
-            "kind": "VAR_POSITIONAL",
-            "name": "args"
-          },
-          {
-            "annotation": null,
-            "default": null,
-            "kind": "VAR_KEYWORD",
-            "name": "kwargs"
-          }
-        ]
-      },
-      {
-        "api_path": "grain.python.RandomMapOperation",
-        "docstring": "Applies user-provided random_map_function with rng to input records.",
-        "has_varargs": false,
-        "kind": "class",
-        "name": "RandomMapOperation",
-        "params": [
-          {
-            "annotation": "Callable[[~_IN, numpy.random._generator.Generator], ~_OUT]",
-            "default": null,
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "random_map_function"
-          }
-        ]
-      },
-      {
-        "api_path": "grain.python.RandomMapTransform",
-        "docstring": "Abstract base class for all random 1:1 transformations of elements.\n\nImplementations should be threadsafe since they are often executed in\nparallel.",
-        "has_varargs": true,
-        "kind": "class",
-        "name": "RandomMapTransform",
-        "params": [
-          {
-            "annotation": null,
-            "default": null,
-            "kind": "VAR_POSITIONAL",
-            "name": "args"
-          },
-          {
-            "annotation": null,
-            "default": null,
-            "kind": "VAR_KEYWORD",
-            "name": "kwargs"
-          }
-        ]
-      },
-      {
-        "api_path": "grain.python.RangeDataSource",
-        "docstring": "Range data source, similar to python range() function.",
-        "has_varargs": false,
-        "kind": "class",
-        "name": "RangeDataSource",
+        "overloads": [],
         "params": [
           {
             "annotation": "int",
-            "default": null,
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "start"
-          },
-          {
-            "annotation": "int",
-            "default": null,
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "stop"
-          },
-          {
-            "annotation": "int",
-            "default": null,
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "step"
-          }
-        ]
-      },
-      {
-        "api_path": "grain.python.ReadOptions",
-        "docstring": "Options for reading data from the DataSource.\n\nThese settings configure a single Python process. Each process uses separate\nthreads and buffer for reading and processing data.\n\nExample: With ReadOptions.num_threads=8 and\nMultiprocessingOptions.num_workers=10 there will be 80 threads reading the\ndata (8 threads in each of 10 Python processes).\n\nAttributes:\n  num_threads: Number of threads reading from the DataSource in parallel. If\n    the data are already loaded in memory, we recommend setting this to 0 to\n    avoid Python GIL contention by multiple threads.\n  prefetch_buffer_size: Size of the buffer for reading elements per Python\n    process (not per thread). Useful when reading from a distributed file\n    system.",
-        "has_varargs": false,
-        "kind": "class",
-        "name": "ReadOptions",
-        "params": [
-          {
-            "annotation": "int",
-            "default": "16",
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "num_threads"
-          },
-          {
-            "annotation": "int",
-            "default": "500",
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "prefetch_buffer_size"
-          }
-        ]
-      },
-      {
-        "api_path": "grain.python.Record",
-        "docstring": "Record(metadata: grain._src.python.record.RecordMetadata, data: ~T)",
-        "has_varargs": false,
-        "kind": "class",
-        "name": "Record",
-        "params": [
-          {
-            "annotation": "grain._src.python.record.RecordMetadata",
-            "default": null,
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "metadata"
-          },
-          {
-            "annotation": "~T",
-            "default": null,
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "data"
-          }
-        ]
-      },
-      {
-        "api_path": "grain.python.RecordMetadata",
-        "docstring": "RecordMetadata contains metadata about indidivual records.\n\nMetadata can be emitted by the sampler to refer to which record to read next.\nIn addition, they are also used to keep information about records as they flow\nthrough the pipeline from one operation to the other.",
-        "has_varargs": false,
-        "kind": "class",
-        "name": "RecordMetadata",
-        "params": [
-          {
-            "annotation": "int",
-            "default": null,
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "index"
-          },
-          {
-            "annotation": "int | None",
-            "default": "None",
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "record_key"
-          },
-          {
-            "annotation": "numpy.random._generator.Generator | None",
-            "default": "None",
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "rng"
-          }
-        ]
-      },
-      {
-        "api_path": "grain.python.Sampler",
-        "docstring": "Interface for PyGrain-compatible sampler.",
-        "has_varargs": true,
-        "kind": "class",
-        "name": "Sampler",
-        "params": [
-          {
-            "annotation": null,
-            "default": null,
-            "kind": "VAR_POSITIONAL",
-            "name": "args"
-          },
-          {
-            "annotation": null,
-            "default": null,
-            "kind": "VAR_KEYWORD",
-            "name": "kwargs"
-          }
-        ]
-      },
-      {
-        "api_path": "grain.python.SequentialSampler",
-        "docstring": "Basic sampler implementation that provides records in order.",
-        "has_varargs": false,
-        "kind": "class",
-        "name": "SequentialSampler",
-        "params": [
-          {
-            "annotation": "int",
-            "default": null,
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "num_records"
-          },
-          {
-            "annotation": "grain._src.core.sharding.ShardOptions",
-            "default": "NoSharding(shard_index=0, shard_count=1, drop_remainder=False)",
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "shard_options"
-          },
-          {
-            "annotation": "int | None",
-            "default": "None",
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "seed"
-          }
-        ]
-      },
-      {
-        "api_path": "grain.python.ShardByJaxProcess",
-        "docstring": "Shards the data across JAX processes.",
-        "has_varargs": false,
-        "kind": "class",
-        "name": "ShardByJaxProcess",
-        "params": [
-          {
-            "annotation": "bool",
-            "default": "False",
-            "kind": "POSITIONAL_OR_KEYWORD",
-            "name": "drop_remainder"
-          }
-        ]
-      },
-      {
-        "api_path": "grain.python.ShardOptions",
-        "docstring": "Dataclass to hold options for sharding a data source.\n\nAttributes:\n  shard_index: The index of the shard to use in this process. Must be in [0,\n    shard_count - 1].\n  shard_count: The total number of shards.\n  drop_remainder: If True shard() will create even splits and drop the\n    remainder examples (all shards will have the same number of examples). If\n    False will distribute the remainder N over the first N shards.",
-        "has_varargs": false,
-        "kind": "class",
-        "name": "ShardOptions",
-        "params": [
-          {
-            "annotation": "int",
-            "default": null,
+            "default": "0",
+            "description": "Zero-based shard index (defaults to 0).",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "shard_index"
           },
           {
             "annotation": "int",
-            "default": null,
+            "default": "1",
+            "description": "Total shard count (defaults to 1).",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "shard_count"
           },
           {
             "annotation": "bool",
             "default": "False",
+            "description": "Drop remainder flag (defaults to False).",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "drop_remainder"
           }
-        ]
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
-        "api_path": "grain.python.SharedMemoryArray",
-        "docstring": "A NumPy array subclass which is backed by shared memory.\n\nThis should be used in combination with Python multiprocessing.\nCompared with the normal NumPy ndarray it avoids expensive serialization\nwhen sending the array to another Python process (on the same machine).\nIt also doesn't require a copy on the receiving side.\n\nThe last processes using the array must call unlink_on_del()! Otherwise\nthe memory will not be freed.",
+        "aliases": [],
+        "api_path": "grain.python.Operation",
+        "docstring": "Base protocol and class for iterator-to-iterator record operations.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": true,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
-        "name": "SharedMemoryArray",
+        "name": "Operation",
+        "overloads": [],
         "params": [
           {
-            "annotation": null,
-            "default": null,
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
             "kind": "VAR_POSITIONAL",
             "name": "args"
           },
           {
-            "annotation": null,
-            "default": null,
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
             "kind": "VAR_KEYWORD",
             "name": "kwargs"
           }
-        ]
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
-        "api_path": "grain.python.InMemoryDataSource",
-        "docstring": "Simple in-memory data source for sequences that is sharable among multiple processes.\n\nNote:\n  This constrains storable values to only the int, float, bool, str (less than\n  10M bytes each), bytes (less than 10M bytes each), and None built-in data\n  types. It also notably differs from the built-in list type in that these\n  lists can not change their overall length (i.e. no append, insert, etc.)",
-        "has_varargs": false,
+        "aliases": [],
+        "api_path": "grain.python.RandomAccessDataSource",
+        "docstring": "Base protocol and class for indexable random-access data sources.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": true,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "class",
-        "name": "SharedMemoryDataSource",
+        "name": "RandomAccessDataSource",
+        "overloads": [],
         "params": [
           {
-            "annotation": "collections.abc.Sequence[Any] | None",
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
+            "kind": "VAR_POSITIONAL",
+            "name": "args"
+          },
+          {
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
+            "kind": "VAR_KEYWORD",
+            "name": "kwargs"
+          }
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
+      },
+      {
+        "aliases": [],
+        "api_path": "grain.python.RandomMapOperation",
+        "docstring": "Operation applying a stochastic callable or ``RandomMapTransform`` to each record.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
+        "kind": "class",
+        "name": "RandomMapOperation",
+        "overloads": [],
+        "params": [
+          {
+            "annotation": "Callable[[T_in, RNGGeneratorProtocol], T_out] | RandomMapTransform[T_in, T_out] | None",
+            "default": "'```(None)```'",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "random_map_function"
+          }
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
+      },
+      {
+        "aliases": [],
+        "api_path": "grain.python.RandomMapTransform",
+        "docstring": "Base class for stochastic element-wise transformations using a per-record RNG.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": true,
+        "is_c_extension": false,
+        "is_public": true,
+        "kind": "class",
+        "name": "RandomMapTransform",
+        "overloads": [],
+        "params": [
+          {
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
+            "kind": "VAR_POSITIONAL",
+            "name": "args"
+          },
+          {
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
+            "kind": "VAR_KEYWORD",
+            "name": "kwargs"
+          }
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
+      },
+      {
+        "aliases": [],
+        "api_path": "grain.python.RangeDataSource",
+        "docstring": "Random-access data source yielding integers from a Python ``range``.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
+        "kind": "class",
+        "name": "RangeDataSource",
+        "overloads": [],
+        "params": [
+          {
+            "annotation": "int",
+            "default": "0",
+            "description": "Inclusive start of the integer range.",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "start"
+          },
+          {
+            "annotation": "int",
+            "default": "10",
+            "description": "Exclusive end of the integer range.",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "stop"
+          },
+          {
+            "annotation": "int",
+            "default": "1",
+            "description": "Step increment between consecutive values (must be non-zero).",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "step"
+          }
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
+      },
+      {
+        "aliases": [],
+        "api_path": "grain.python.ReadOptions",
+        "docstring": "Options controlling multithreaded reading and prefetching from a data source.\n\nAttributes:\n    num_threads (int): Number of reader threads per worker process.\n    prefetch_buffer_size (int): Size of the per-worker read prefetch buffer.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
+        "kind": "class",
+        "name": "ReadOptions",
+        "overloads": [],
+        "params": [
+          {
+            "annotation": "int",
+            "default": "16",
+            "description": "Number of threads reading from the data source (must be ``>= 0``).",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "num_threads"
+          },
+          {
+            "annotation": "int",
+            "default": "500",
+            "description": "Number of elements to prefetch (must be ``>= 0``).",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "prefetch_buffer_size"
+          }
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
+      },
+      {
+        "aliases": [],
+        "api_path": "grain.python.Record",
+        "docstring": "Container pairing a ``RecordMetadata`` instance with a data payload.\n\nAttributes:\n    metadata (RecordMetadata | None): Associated record metadata.\n    data (T | None): Record payload element.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
+        "kind": "class",
+        "name": "Record",
+        "overloads": [],
+        "params": [
+          {
+            "annotation": "RecordMetadata | None",
+            "default": "'```(None)```'",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "metadata"
+          },
+          {
+            "annotation": "T | None",
+            "default": "'```(None)```'",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "data"
+          }
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
+      },
+      {
+        "aliases": [],
+        "api_path": "grain.python.RecordMetadata",
+        "docstring": "Metadata tracking a record's position, source key, and deterministic RNG.\n\nAttributes:\n    index (int | None): Global sequential index in the sampler stream.\n    record_key (int | None): Key used to fetch the record from the data source.\n    rng (RNGGeneratorProtocol | None): Per-record random number generator.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
+        "kind": "class",
+        "name": "RecordMetadata",
+        "overloads": [],
+        "params": [
+          {
+            "annotation": "int | None",
+            "default": "'```(None)```'",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "index"
+          },
+          {
+            "annotation": "int | None",
+            "default": "'```(None)```'",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "record_key"
+          },
+          {
+            "annotation": "RNGGeneratorProtocol | None",
+            "default": "'```(None)```'",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "rng"
+          }
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
+      },
+      {
+        "aliases": [],
+        "api_path": "grain.python.Sampler",
+        "docstring": "Base protocol and class for Grain record samplers.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": true,
+        "is_c_extension": false,
+        "is_public": true,
+        "kind": "class",
+        "name": "Sampler",
+        "overloads": [],
+        "params": [
+          {
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
+            "kind": "VAR_POSITIONAL",
+            "name": "args"
+          },
+          {
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
+            "kind": "VAR_KEYWORD",
+            "name": "kwargs"
+          }
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
+      },
+      {
+        "aliases": [],
+        "api_path": "grain.python.SequentialSampler",
+        "docstring": "Sampler emitting records in sequential order without shuffling.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
+        "kind": "class",
+        "name": "SequentialSampler",
+        "overloads": [],
+        "params": [
+          {
+            "annotation": "int",
+            "default": "1",
+            "description": "Total number of records in the dataset (must be ``> 0``).",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "num_records"
+          },
+          {
+            "default": "'```(_DEFAULT_NO_SHARDING)```'",
+            "description": "Sharding configuration across processes.",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "shard_options"
+          },
+          {
+            "annotation": "int | None | None",
+            "default": "'```(None)```'",
+            "description": "Optional seed for deterministic RNG attachment.",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "seed"
+          }
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
+      },
+      {
+        "aliases": [],
+        "api_path": "grain.python.ShardByJaxProcess",
+        "docstring": "``ShardOptions`` subclass that shards records across JAX processes.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
+        "kind": "class",
+        "name": "ShardByJaxProcess",
+        "overloads": [],
+        "params": [
+          {
+            "annotation": "bool",
+            "default": "False",
+            "description": "Whether to drop trailing records not divisible by process count.",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "drop_remainder"
+          }
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
+      },
+      {
+        "aliases": [],
+        "api_path": "grain.python.ShardOptions",
+        "docstring": "Configuration specifying data sharding across workers or hosts.\n\nAttributes:\n    shard_index (int): Zero-based index of the current shard.\n    shard_count (int): Total number of shards across all processes.\n    drop_remainder (bool): Whether to drop trailing records not evenly divisible.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
+        "kind": "class",
+        "name": "ShardOptions",
+        "overloads": [],
+        "params": [
+          {
+            "annotation": "int",
+            "default": "0",
+            "description": "Zero-based shard index in ``[0, shard_count)``.",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "shard_index"
+          },
+          {
+            "annotation": "int",
+            "default": "1",
+            "description": "Total number of shards (must be ``>= 1``).",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "shard_count"
+          },
+          {
+            "annotation": "bool",
+            "default": "False",
+            "description": "Whether to drop trailing uneven records.",
+            "is_mandatory": false,
+            "kind": "POSITIONAL_OR_KEYWORD",
+            "name": "drop_remainder"
+          }
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
+      },
+      {
+        "aliases": [],
+        "api_path": "grain.python.SharedMemoryArray",
+        "docstring": "Wrapper around an array backed by a shared memory buffer.\n\nAttributes:\n    metadata (SharedMemoryArrayMetadata): Associated shared memory metadata.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": true,
+        "is_c_extension": false,
+        "is_public": true,
+        "kind": "class",
+        "name": "SharedMemoryArray",
+        "overloads": [],
+        "params": [
+          {
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
+            "kind": "VAR_POSITIONAL",
+            "name": "args"
+          },
+          {
+            "annotation": "int | float | bool | str | bytes | complex | NoneType | zero_grain._types.ArrayProtocol | zero_grain._types.ArrayConvertibleProtocol | zero_grain._types.DataclassProtocol | zero_grain._types.NamedTupleProtocol | collections.abc.Sequence['ElementTree'] | collections.abc.Mapping[str, 'ElementTree']",
+            "is_mandatory": true,
+            "kind": "VAR_KEYWORD",
+            "name": "kwargs"
+          }
+        ],
+        "raises": [],
+        "returns_type": "NoneType",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
+      },
+      {
+        "aliases": [],
+        "api_path": "grain.python.InMemoryDataSource",
+        "docstring": "Alias subclass for ``SharedMemoryDataSource`` storing elements in memory.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
+        "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
+        "kind": "class",
+        "name": "SharedMemoryDataSource",
+        "overloads": [],
+        "params": [
+          {
+            "annotation": "Sequence[T_co] | None",
             "default": "None",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "elements"
           },
           {
             "annotation": "str | None",
             "default": "None",
+            "is_mandatory": false,
             "kind": "KEYWORD_ONLY",
             "name": "name"
           }
-        ]
+        ],
+        "raises": [],
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       },
       {
+        "aliases": [],
         "api_path": "grain.python.load",
-        "docstring": "Convenient method for simple pipelines on top of a data source.\n\nArgs:\n  source: Data source to load from. This can be one of the file data sources\n    provided by Grain, a TFDS data source (`tfds.data_source(...)`) or your\n    custom data source.\n  num_epochs: See IndexSampler.\n  shuffle: See IndexSampler.\n  seed: See IndexSampler.\n  shard_options: See IndexSampler.\n  transformations: List of local (stateless) transformations:\n  batch_size: Optional batch size. If provided will apply BatchOperation().\n  drop_remainder: Whether to drop partial batches.\n  worker_count: Number of child processes launched to parallelize the\n    transformations among. Zero means processing runs in the same process.\n  read_options: Read options for the data loader. See ReadOptions.\n\nReturns:\n  DataLoader for this dataset.",
+        "docstring": "Convenience function constructing a ``DataLoader`` for ``source``.\n\nArgs:\n    source (RandomAccessDataSource[T_co] | Sequence[T_co] | None):\n        Input random-access data source or sequence.\n    num_epochs (int | None): Number of epochs to iterate.\n    shuffle (bool): Whether to shuffle records within each epoch.\n    seed (int | None): Seed used when ``shuffle=True``.\n    shard_options (ShardOptions): Sharding configuration.\n    transformations (Sequence[TransformationSpec]): Sequence of transforms to apply.\n    batch_size (int | None): Optional batch size to append a ``BatchOperation``.\n    drop_remainder (bool): Whether to drop trailing incomplete batches.\n    worker_count (int | None): Number of worker processes.\n    read_options (ReadOptions | None): Reader threading and buffer options.\n    options (LoadOptions | None): Optional legacy ``LoadOptions`` container.\n\nReturns:\n    DataLoader[T_co]: Configured ``DataLoader`` instance.",
+        "domain_type": "python",
+        "environment_tags": [
+          "cpu"
+        ],
         "has_varargs": false,
+        "is_c_extension": false,
+        "is_public": true,
         "kind": "function",
         "name": "load",
+        "overloads": [],
         "params": [
           {
-            "annotation": "grain._src.python.data_sources.RandomAccessDataSource",
-            "default": null,
+            "annotation": "RandomAccessDataSource[T_co] | Sequence[T_co] | None",
+            "default": "'```(None)```'",
+            "description": "\nInput random-access data source or sequence.",
+            "is_mandatory": false,
             "kind": "POSITIONAL_OR_KEYWORD",
             "name": "source"
           },
           {
             "annotation": "int | None",
-            "default": "None",
+            "default": "'```(None)```'",
+            "description": "Number of epochs to iterate.",
+            "is_mandatory": false,
             "kind": "KEYWORD_ONLY",
             "name": "num_epochs"
           },
           {
             "annotation": "bool",
             "default": "False",
+            "description": "Whether to shuffle records within each epoch.",
+            "is_mandatory": false,
             "kind": "KEYWORD_ONLY",
             "name": "shuffle"
           },
           {
             "annotation": "int | None",
-            "default": "None",
+            "default": "'```(None)```'",
+            "description": "Seed used when ``shuffle=True``.",
+            "is_mandatory": false,
             "kind": "KEYWORD_ONLY",
             "name": "seed"
           },
           {
-            "annotation": "grain._src.core.sharding.ShardOptions",
-            "default": "NoSharding(shard_index=0, shard_count=1, drop_remainder=False)",
+            "annotation": "ShardOptions",
+            "default": "'```(_DEFAULT_NO_SHARDING)```'",
+            "description": "Sharding configuration.",
+            "is_mandatory": false,
             "kind": "KEYWORD_ONLY",
             "name": "shard_options"
           },
           {
-            "annotation": "collections.abc.Sequence[grain._src.core.transforms.Batch | grain._src.core.transforms.MapTransform | grain._src.core.transforms.RandomMapTransform | grain._src.core.transforms.TfRandomMapTransform | grain._src.core.transforms.Filter | grain._src.core.transforms.FlatMapTransform | grain._src.core.transforms.MapWithIndex]",
-            "default": "()",
+            "annotation": "Sequence[TransformationSpec]",
+            "description": "Sequence of transforms to apply.",
+            "is_mandatory": true,
             "kind": "KEYWORD_ONLY",
             "name": "transformations"
           },
           {
             "annotation": "int | None",
-            "default": "None",
+            "description": "Optional batch size to append a ``BatchOperation``.",
+            "is_mandatory": true,
             "kind": "KEYWORD_ONLY",
             "name": "batch_size"
           },
           {
             "annotation": "bool",
-            "default": "False",
+            "description": "Whether to drop trailing incomplete batches.",
+            "is_mandatory": true,
             "kind": "KEYWORD_ONLY",
             "name": "drop_remainder"
           },
           {
             "annotation": "int | None",
-            "default": "0",
+            "description": "Number of worker processes.",
+            "is_mandatory": true,
             "kind": "KEYWORD_ONLY",
             "name": "worker_count"
           },
           {
-            "annotation": "grain._src.python.options.ReadOptions | None",
-            "default": "None",
+            "annotation": "ReadOptions | None",
+            "description": "Reader threading and buffer options.",
+            "is_mandatory": true,
             "kind": "KEYWORD_ONLY",
             "name": "read_options"
+          },
+          {
+            "annotation": "LoadOptions | None",
+            "description": "Optional legacy ``LoadOptions`` container.",
+            "is_mandatory": true,
+            "kind": "KEYWORD_ONLY",
+            "name": "options"
           }
-        ]
+        ],
+        "raises": [],
+        "returns_description": "DataLoader[T_co]: Configured ``DataLoader`` instance.",
+        "schema_version": "2.0.0",
+        "signature_completeness": "exact"
       }
     ]
   },
+  "schema_version": "2.0.0",
+  "source_type": "python_framework",
+  "target": "grain",
+  "upstream_version": "0.2.16.dev20260112",
   "version": "0.2.16.dev20260112"
 }

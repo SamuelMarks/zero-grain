@@ -5,7 +5,26 @@ build-backend = "hatchling.build"
 [project]
 name = "zero_grain"
 version = "0.2.16.dev20260112"
-dynamic = ["dependencies"]
+description = "Zero-dependency implementation of Google Grain API"
+authors = [
+    { name = "Samuel Marks <807580+SamuelMarks@users.noreply.github.com>" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dynamic = ["dependencies", "optional-dependencies"]
+
+[project.urls]
+Homepage = "https://github.com/SamuelMarks/zero-grain"
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -13,15 +32,86 @@ allow-direct-references = true
 [tool.hatch.metadata.hooks.requirements_txt]
 files = ["requirements.txt"]
 
+[tool.hatch.metadata.hooks.requirements_txt.optional-dependencies]
+test = ["requirements-test.txt"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/zero_grain"]
 
+[tool.ruff]
+line-length = 120
+
 [tool.ruff.lint]
-ignore = ['E402', 'F401', 'F841', 'E741']
+select = ["E4", "E7", "E9", "F", "D100", "D101", "D102", "D103", "D104", "D105", "D107", "D401", "D417"]
+ignore = ["E501"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.coverage.run]
-source = ["src"]
+source = ["src", "scripts"]
 branch = true
 
 [tool.coverage.report]
 fail_under = 100
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "@abstractmethod",
+    '^\s*\.\.\.\s*$',
+]
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = "src"
+explicit_package_bases = true
+files = ["src", "tests", "scripts"]
+strict = true
+disallow_any_explicit = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_return_any = true
+warn_unused_configs = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = ["tests", "tests.*"]
+disallow_untyped_decorators = false
+disallow_subclassing_any = false
+disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = [
+    "absl.*",
+    "parameterized.*",
+    "numpy",
+    "numpy.*",
+    "pytest",
+    "_pytest.*",
+    "ml_ecosystem_snapshots.*",
+    "ml_switcheroo_ir.*",
+]
+ignore_missing_imports = true
+follow_imports = "skip"
+follow_imports_for_stubs = true
+disable_error_code = ["import-untyped"]
+
+[tool.interrogate]
+fail-under = 100
+ignore-init-module = false
+ignore-init-method = false
+ignore-nested-classes = false
+ignore-private = false
+ignore-semiprivate = false
+ignore-overloaded-functions = true
