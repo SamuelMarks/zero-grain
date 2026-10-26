@@ -1075,3 +1075,13 @@ def test_scripts_execution(tmp_path: Path) -> None:
     sample_readme_3.write_text("# Plain Readme", encoding="utf-8")
     assert update_badges.update_readme(sample_readme_3, doc_pct=100.0) is True
     assert sample_readme_3.read_text(encoding="utf-8") == "# Plain Readme"
+
+    import subprocess
+
+    proc = subprocess.run(
+        [sys.executable, "scripts/update_badges.py", str(sample_readme_1)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0

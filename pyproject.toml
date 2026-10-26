@@ -116,6 +116,25 @@ disallow_untyped_calls = false
 
 [[tool.mypy.overrides]]
 module = [
+    "ml_switcheroo_ir",
+    "ml_switcheroo_ir.*",
+    "ml_switcheroo_compiler",
+    "ml_switcheroo_compiler.*",
+    "zero_chex",
+    "zero_chex.*",
+    "zero_flax",
+    "zero_flax.*",
+    "zero_jax",
+    "zero_jax.*",
+    "zero_optax",
+    "zero_optax.*",
+    "zero_orbax",
+    "zero_orbax.*",
+]
+follow_imports = "silent"
+
+[[tool.mypy.overrides]]
+module = [
     "absl.*",
     "parameterized.*",
     "numpy",

@@ -15,8 +15,44 @@ jobs:
     env:
       UV_DYNAMIC_VERSIONING_BYPASS: "2.2.0"
       PDM_BUILD_SCM_VERSION: "2.2.0"
+    defaults:
+      run:
+        working-directory: zero-grain
     steps:
-    - uses: actions/checkout@v7
+    - name: Checkout zero-grain
+      uses: actions/checkout@v7
+      with:
+        path: zero-grain
+
+    - name: Checkout zero-jax
+      uses: actions/checkout@v7
+      with:
+        repository: SamuelMarks/zero-jax
+        path: zero-jax
+
+    - name: Checkout zero-chex
+      uses: actions/checkout@v7
+      with:
+        repository: SamuelMarks/zero-chex
+        path: zero-chex
+
+    - name: Checkout zero-flax
+      uses: actions/checkout@v7
+      with:
+        repository: SamuelMarks/zero-flax
+        path: zero-flax
+
+    - name: Checkout zero-optax
+      uses: actions/checkout@v7
+      with:
+        repository: SamuelMarks/zero-optax
+        path: zero-optax
+
+    - name: Checkout zero-orbax
+      uses: actions/checkout@v7
+      with:
+        repository: SamuelMarks/zero-orbax
+        path: zero-orbax
 
     - name: Set up Python
       uses: actions/setup-python@v7
@@ -28,7 +64,15 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install -r requirements-test.txt
-        pip install -e .
+        pip install "ml-switcheroo-ir @ https://github.com/SamuelMarks/ml-switcheroo-ir/releases/download/v0.0.4/ml_switcheroo_ir-0.0.4-py3-none-any.whl"
+        pip install "ml-switcheroo-compiler @ https://github.com/SamuelMarks/ml-switcheroo-compiler/releases/download/v0.0.1/ml_switcheroo_compiler-0.0.1-py3-none-any.whl"
+        pip install "ml-ecosystem-snapshots @ https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.5/ml_ecosystem_snapshots-0.0.5-py3-none-any.whl"
+        pip install --no-deps -e ../zero-jax
+        pip install --no-deps -e ../zero-chex
+        pip install --no-deps -e ../zero-flax
+        pip install --no-deps -e ../zero-optax
+        pip install --no-deps -e ../zero-orbax
+        pip install --no-deps -e .
 
     - name: Lint with Ruff
       run: |
@@ -52,6 +96,7 @@ jobs:
     - name: Check API Snapshot & Test Completeness
       run: |
         python3 scripts/calc_compliance.py
+        python3 scripts/check_compliance.py --strict-v005
         python3 scripts/check_test_completeness.py
 
     - name: Test with Pytest (100% Line & Branch Coverage)
