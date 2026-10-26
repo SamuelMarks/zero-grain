@@ -15,6 +15,7 @@ from zero_grain._types import (
     T_out,
     is_ndarray_instance,
 )
+from zero_grain.options import DatasetOptions
 from zero_grain.record import Record, RecordMetadata
 from zero_grain.shared_memory_array import SharedMemoryArray
 from zero_grain.transforms import (
@@ -320,15 +321,20 @@ class FilterOperation(Operation[T_in, T_in]):
     def __init__(
         self,
         condition_function: (Callable[[T_in], bool] | FilterTransform[T_in] | None) = None,
+        *,
+        dataset_options: DatasetOptions | None = None,
     ) -> None:
         """Initialize ``FilterOperation``.
 
         Args:
             condition_function (Callable[[T_in], bool] | FilterTransform[T_in] | None):
                 Predicate function or ``FilterTransform`` returning True for kept records.
+            dataset_options (DatasetOptions | None):
+                Optional ``DatasetOptions`` configuring filter drop threshold warnings and errors.
         """
         super().__init__()
         self.condition_function = condition_function
+        self.dataset_options = dataset_options
 
     def filter(self, element: T_in) -> bool:
         """Evaluate the filter condition on ``element``.
@@ -381,11 +387,18 @@ class FilterOperation(Operation[T_in, T_in]):
         Yields:
             Record[T_in]: Filtered records with ``record_key`` cleared.
         """
+        total_seen = 0
+        total_filtered = 0
         for record in input_iterator:
             if record is not None and record.metadata is not None:
+                total_seen += 1
                 if self.filter(record.data):
                     meta = record.metadata.remove_record_key()
                     yield Record(metadata=meta, data=record.data)
+                else:
+                    total_filtered += 1
+        if self.dataset_options is not None and total_seen > 0:
+            self.dataset_options.check_filter_ratio(total_seen, total_filtered)
 
 
 class FlatMapOperation(Operation[T_in, T_out]):
@@ -549,6 +562,27 @@ class CopyNumPyArrayToSharedMemoryOperation(Operation[ElementTree, ElementTree])
             ElementTree: Transformed PyTree with C-contiguous non-object arrays converted.
         """
         return map_tree(_convert_leaf_to_shm, element)
+
+    def apply_element(
+        self,
+        element: ElementTree,
+        index: int = 0,
+        seed: int | None = None,
+        op_seed: int = 0,
+    ) -> ElementTree:
+        """Apply shared-memory array conversion to a single indexed ``element``.
+
+        Args:
+            element (ElementTree): Input PyTree or leaf element.
+            index (int): Logical record index (unused).
+            seed (int | None): Base RNG seed (unused).
+            op_seed (int): Operation-level seed offset (unused).
+
+        Returns:
+            ElementTree: Transformed PyTree with C-contiguous non-object arrays converted.
+        """
+        del index, seed, op_seed
+        return self.map(element)
 
     def __call__(
         self,

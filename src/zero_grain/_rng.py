@@ -10,7 +10,9 @@ import random
 from zero_flax.nnx.rnglib import Rngs as FlaxRngs
 from zero_grain._types import (
     ArrayProtocol,
+    NestedNumericList,
     RNGGeneratorProtocol,
+    ScalarElement,
     array_to_list,
     get_numpy_module,
 )
@@ -210,11 +212,11 @@ def _extract_array_seed(key_arr: ArrayProtocol) -> int:
         int: Extracted integer seed.
     """
     raw = array_to_list(key_arr)
-    assert isinstance(raw, list)
-    if len(raw) == 2 and raw[0] == 0 and isinstance(raw[1], int):
-        return int(raw[1])
+    raw_items: list[ScalarElement | NestedNumericList] = [item for item in raw] if isinstance(raw, list) else [raw]
+    if len(raw_items) == 2 and raw_items[0] == 0 and isinstance(raw_items[1], int):
+        return int(raw_items[1])
     acc = 0
-    for item in raw:
+    for item in raw_items:
         acc = ((acc * 1_000_003) ^ (int(item) if isinstance(item, int) else 0)) & 0xFFFFFFFF
     return acc
 

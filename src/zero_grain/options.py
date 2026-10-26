@@ -8,6 +8,18 @@ import sys
 from zero_grain._types import AbslLoggingModuleProtocol
 
 
+def _emit_warning(msg: str) -> None:
+    """Emit a warning message to both ``logging`` and ``absl.logging`` if loaded.
+
+    Args:
+        msg (str): Warning message text.
+    """
+    logging.warning(msg)
+    absl_logging = sys.modules.get("absl.logging")
+    if isinstance(absl_logging, AbslLoggingModuleProtocol):
+        absl_logging.warning(msg)
+
+
 @dataclasses.dataclass
 class ReadOptions:
     """Options controlling multithreaded reading and prefetching from a data source.
@@ -32,10 +44,7 @@ class ReadOptions:
             raise ValueError("prefetch_buffer_size must be non-negative")
         if 0 < self.prefetch_buffer_size < self.num_threads:
             msg = f"prefetch_buffer_size={self.prefetch_buffer_size} is smaller than num_threads={self.num_threads}"
-            logging.warning(msg)
-            absl_logging = sys.modules.get("absl.logging")
-            if isinstance(absl_logging, AbslLoggingModuleProtocol):
-                absl_logging.warning(msg)
+            _emit_warning(msg)
 
 
 @dataclasses.dataclass
@@ -89,6 +98,30 @@ class DatasetOptions:
         if self.filter_raise_threshold_ratio is not None and not (0.0 <= self.filter_raise_threshold_ratio <= 1.0):
             raise ValueError(
                 f"filter_raise_threshold_ratio must be in [0.0, 1.0], got {self.filter_raise_threshold_ratio}"
+            )
+
+    def check_filter_ratio(self, total_seen: int, total_filtered: int) -> None:
+        """Validate observed filter drop ratio against configured warn and raise thresholds.
+
+        Args:
+            total_seen (int): Total number of candidate records evaluated.
+            total_filtered (int): Number of candidate records dropped by the filter.
+
+        Raises:
+            ValueError: If the filtered ratio reaches or exceeds ``filter_raise_threshold_ratio``.
+        """
+        if total_seen <= 0:
+            return
+        ratio = total_filtered / total_seen
+        if self.filter_raise_threshold_ratio is not None and ratio >= self.filter_raise_threshold_ratio:
+            raise ValueError(
+                f"Filtered ratio {ratio:.2f} ({total_filtered}/{total_seen}) reached or exceeded "
+                f"filter_raise_threshold_ratio={self.filter_raise_threshold_ratio}"
+            )
+        if self.filter_warn_threshold_ratio is not None and ratio >= self.filter_warn_threshold_ratio:
+            _emit_warning(
+                f"Filtered ratio {ratio:.2f} ({total_filtered}/{total_seen}) reached or exceeded "
+                f"filter_warn_threshold_ratio={self.filter_warn_threshold_ratio}"
             )
 
 

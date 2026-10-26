@@ -9,6 +9,25 @@ from pathlib import Path
 import sys
 
 
+def _get_explicit_all(filepath: Path) -> set[str]:
+    """Extract string entries from ``__all__`` in ``filepath``.
+
+    Args:
+        filepath (Path): Python file to inspect.
+
+    Returns:
+        set[str]: Public symbol names listed in ``__all__``.
+    """
+    tree = ast.parse(filepath.read_text(encoding="utf-8"), filename=str(filepath))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, (ast.List, ast.Tuple)):
+            for elt in node.value.elts:
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str) and not elt.value.startswith("_"):
+                    names.add(elt.value)
+    return names
+
+
 def get_exported_classes(init_path: Path = Path("src/zero_grain/__init__.py")) -> set[str]:
     """Extract exported public symbol names from ``init_path``.
 
@@ -30,25 +49,87 @@ def get_exported_classes(init_path: Path = Path("src/zero_grain/__init__.py")) -
             for elt in node.value.elts:
                 if isinstance(elt, ast.Constant) and isinstance(elt.value, str) and not elt.value.startswith("_"):
                     exported.add(elt.value)
+    if init_path == Path("src/zero_grain/__init__.py"):
+        for extra_file in (Path("src/zero_grain/experimental.py"), Path("src/zero_grain/python/__init__.py")):
+            exported |= _get_explicit_all(extra_file)
     return exported
 
 
+def _is_tautological_expr(expr: ast.AST) -> bool:
+    """Check whether ``expr`` is a trivially tautological boolean expression (e.g. ``True`` or ``x == x``).
+
+    Args:
+        expr (ast.AST): Expression node to inspect.
+
+    Returns:
+        bool: True if ``expr`` is a static tautology.
+    """
+    if isinstance(expr, ast.Constant) and expr.value is True:
+        return True
+    if (
+        isinstance(expr, ast.Compare)
+        and len(expr.ops) == 1
+        and isinstance(expr.ops[0], (ast.Eq, ast.Is))
+        and len(expr.comparators) == 1
+    ):
+        left_dump = ast.dump(expr.left)
+        right_dump = ast.dump(expr.comparators[0])
+        if left_dump == right_dump:
+            return True
+    return False
+
+
+def find_tautological_assertions(tests_dir: Path = Path("tests")) -> list[str]:
+    """Scan ``tests_dir`` for tautological assertions (``assert True``, ``assert x == x``, ``assertEqual(x, x)``).
+
+    Args:
+        tests_dir (Path): Root tests directory.
+
+    Returns:
+        list[str]: Formatted violation messages for any tautological assertions found.
+    """
+    violations: list[str] = []
+    for test_file in sorted(tests_dir.rglob("*.py")):
+        tree = ast.parse(test_file.read_text(encoding="utf-8"), filename=str(test_file))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assert) and _is_tautological_expr(node.test):
+                violations.append(f"{test_file}:{node.lineno}: Tautological assertion")
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if (
+                    node.func.attr == "assertEqual"
+                    and len(node.args) >= 2
+                    and ast.dump(node.args[0]) == ast.dump(node.args[1])
+                ):
+                    violations.append(f"{test_file}:{node.lineno}: Tautological assertEqual(x, x)")
+                elif node.func.attr == "assertTrue" and len(node.args) >= 1 and _is_tautological_expr(node.args[0]):
+                    violations.append(f"{test_file}:{node.lineno}: Tautological assertTrue(True)")
+    return violations
+
+
 def _function_has_assertion(fn_node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Check whether ``fn_node`` contains an ``assert`` or ``self.assert*`` / ``pytest.raises`` call.
+    """Check whether ``fn_node`` contains a non-tautological ``assert`` or ``self.assert*`` / ``pytest.raises`` call.
 
     Args:
         fn_node (ast.FunctionDef | ast.AsyncFunctionDef): Function AST node.
 
     Returns:
-        bool: True if at least one assertion or exception check is present in ``fn_node``.
+        bool: True if at least one non-tautological assertion or exception check is present in ``fn_node``.
     """
     for node in ast.walk(fn_node):
-        if isinstance(node, ast.Assert):
+        if isinstance(node, ast.Assert) and not _is_tautological_expr(node.test):
             return True
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Attribute) and (
                 node.func.attr.startswith("assert") or node.func.attr in ("raises", "fail", "compare_output")
             ):
+                if (
+                    node.func.attr == "assertEqual"
+                    and len(node.args) >= 2
+                    and ast.dump(node.args[0]) == ast.dump(node.args[1])
+                ):
+                    continue
+                if node.func.attr == "assertTrue" and len(node.args) >= 1 and _is_tautological_expr(node.args[0]):
+                    continue
                 return True
     return False
 
@@ -120,6 +201,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = list(argv) if argv is not None else sys.argv[1:]
     init_path = Path(args[0]) if len(args) >= 1 else Path("src/zero_grain/__init__.py")
     tests_dir = Path(args[1]) if len(args) >= 2 else Path("tests")
+
+    tautologies = find_tautological_assertions(tests_dir)
+    if tautologies:
+        for t_err in tautologies:
+            print(t_err)
+        return 1
 
     expected = get_exported_classes(init_path)
     tested = get_tested_names(tests_dir)

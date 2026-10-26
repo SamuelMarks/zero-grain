@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from zero_grain._rng import derive_rng, index_shuffle
-from zero_grain._types import ElementTree
+from zero_flax.nnx.rnglib import Rngs as FlaxRngs
+from zero_grain._rng import _resolve_seed_int, derive_rng, index_shuffle
+from zero_grain._types import ArrayProtocol, ElementTree
 from zero_grain.record import RecordMetadata
 from zero_grain.sharding import NoSharding, ShardOptions, even_split
 
@@ -167,11 +168,14 @@ class IndexSampler(Sampler):
             raise ValueError(f"num_epochs must be positive, got {num_epochs}")
         validated_seed: int | None = None
         if seed is not None:
-            if not isinstance(seed, int) or isinstance(seed, bool):
+            if isinstance(seed, (ArrayProtocol, FlaxRngs)):
+                validated_seed = _resolve_seed_int(seed)
+            elif not isinstance(seed, int) or isinstance(seed, bool):
                 raise TypeError("seed must be an integer")
-            if seed < 0 or seed >= 2**32:
-                raise ValueError("seed must be a 32-bit unsigned integer in [0, 2**32)")
-            validated_seed = seed
+            else:
+                if seed < 0 or seed >= 2**32:
+                    raise ValueError("seed must be a 32-bit unsigned integer in [0, 2**32)")
+                validated_seed = seed
         self.num_records = num_records
         self.shard_options: ShardOptions = shard_options if shard_options is not None else NoSharding()
         self.shuffle = shuffle

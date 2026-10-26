@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-from zero_grain import _types, shared_memory_array
 from zero_grain._types import CheckpointStateDict, ElementTree
 from zero_orbax.checkpoint import (
     AsyncCheckpointHandler,
@@ -14,7 +13,24 @@ from zero_orbax.checkpoint import (
 from zero_orbax.core import AtomicWrite, FileSystemIO
 from zero_orbax.types import GrainIteratorProtocol, JsonValue, PathLike, PyTree
 
-_ = (_types, shared_memory_array)
+
+def _state_to_json_dict(state: CheckpointStateDict) -> dict[str, JsonValue]:
+    """Convert a ``CheckpointStateDict`` into a shallow ``dict[str, JsonValue]`` copy.
+
+    Args:
+        state (CheckpointStateDict): Source checkpoint state dictionary.
+
+    Returns:
+        dict[str, JsonValue]: Copy with ``JsonValue``-typed entries.
+    """
+    return {
+        "version": state.get("version", 2),
+        "last_seen_indices": {k: v for k, v in state.get("last_seen_indices", {}).items()},
+        "last_worker_index": state.get("last_worker_index", -1),
+        "worker_count": state.get("worker_count", 0),
+        "sampler": state.get("sampler", ""),
+        "data_source": state.get("data_source", ""),
+    }
 
 
 def _extract_process_shard(
@@ -217,8 +233,7 @@ class CheckpointHandler(AsyncCheckpointHandler):
                 return parsed
             return super().metadata(dir_str)
         if self._last_state is not None:
-            last_dict: dict[str, JsonValue] = json.loads(json.dumps(self._last_state))
-            return last_dict
+            return _state_to_json_dict(self._last_state)
         return super().metadata(None)
 
     def close(self) -> None:

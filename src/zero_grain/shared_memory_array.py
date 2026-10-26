@@ -2,14 +2,32 @@
 
 from __future__ import annotations
 
+import atexit
 import dataclasses
 import itertools
 import math
 from multiprocessing import shared_memory
-from zero_grain._types import ArrayProtocol, DTypeProtocol, DTypeSpec, ElementTree, dtype_name
+from zero_grain._types import (
+    ArrayProtocol,
+    BytesExportArrayProtocol,
+    DTypeProtocol,
+    DTypeSpec,
+    ElementTree,
+    dtype_name,
+    get_numpy_module,
+)
 
 _SHM_ID_GEN = itertools.count(1)
 _ACTIVE_SEGMENTS: dict[str, shared_memory.SharedMemory] = {}
+
+
+def _cleanup_all_active_segments() -> None:
+    """Close and unlink all remaining active shared memory segments."""
+    for name in list(_ACTIVE_SEGMENTS.keys()):
+        _release_shared_memory_segment(name)
+
+
+atexit.register(_cleanup_all_active_segments)
 
 
 def _dtype_itemsize(dtype: DTypeSpec) -> int:
@@ -22,11 +40,13 @@ def _dtype_itemsize(dtype: DTypeSpec) -> int:
         int: Number of bytes per element (defaults to 8).
     """
     name = dtype_name(dtype)
-    if "64" in name or "complex128" in name:
+    if "complex128" in name:
+        return 16
+    if "64" in name:
         return 8
-    if "32" in name or "complex64" in name:
+    if "32" in name:
         return 4
-    if "16" in name:
+    if "16" in name or "bfloat16" in name:
         return 2
     if "8" in name or "bool" in name:
         return 1
@@ -85,6 +105,80 @@ class SharedMemoryArrayMetadata:
             _release_shared_memory_segment(self.name)
         self.name = ""
 
+    def get_bytes(self) -> bytes:
+        """Read the raw byte payload stored in the active shared memory segment.
+
+        Returns:
+            bytes: Raw bytes from the shared memory buffer, or ``b""`` if inactive.
+        """
+        shm = _ACTIVE_SEGMENTS.get(self.name)
+        if shm is None or shm.buf is None:
+            return b""
+        num_elements = math.prod(self.shape) if self.shape else 1
+        byte_len = min(len(shm.buf), max(1, num_elements * _dtype_itemsize(self.dtype)))
+        return bytes(shm.buf[:byte_len])
+
+    def to_numpy(self) -> ArrayProtocol:
+        """Reconstruct a zero-filled or buffer-backed ``ArrayProtocol`` from this metadata.
+
+        Returns:
+            ArrayProtocol: Reconstructed array matching ``shape`` and ``dtype``.
+        """
+        import struct
+
+        dt_str = dtype_name(self.dtype)
+        num_elements = math.prod(self.shape) if self.shape else 1
+        raw = self.get_bytes()
+        fmt_char = "d"
+        if "int32" in dt_str:
+            fmt_char = "i"
+        elif "int64" in dt_str:
+            fmt_char = "q"
+        elif "float32" in dt_str:
+            fmt_char = "f"
+        elif "uint8" in dt_str or "bool" in dt_str:
+            fmt_char = "B"
+        expected_bytes = num_elements * struct.calcsize(fmt_char)
+        if raw and len(raw) >= expected_bytes and num_elements > 0:
+            unpacked = list(struct.unpack(f"<{num_elements}{fmt_char}", raw[:expected_bytes]))
+            flat_vals: list[ElementTree] = [bool(v) if "bool" in dt_str else v for v in unpacked]
+        else:
+            zero_val: ElementTree = False if "bool" in dt_str else (0 if "int" in dt_str else 0.0)
+            flat_vals = [zero_val for _ in range(num_elements)]
+
+        def _reshape_flat(vals: list[ElementTree], dims: tuple[int, ...]) -> ElementTree:
+            """Reshape a flat list ``vals`` into nested lists matching ``dims``.
+
+            Args:
+                vals (list[ElementTree]): Flat values.
+                dims (tuple[int, ...]): Target shape dimensions.
+
+            Returns:
+                ElementTree: Nested list or scalar.
+            """
+            if not dims:
+                return vals[0] if vals else 0
+            if len(dims) == 1:
+                return vals[: dims[0]]
+            stride = math.prod(dims[1:])
+            return [_reshape_flat(vals[i * stride : (i + 1) * stride], dims[1:]) for i in range(dims[0])]
+
+        nested = _reshape_flat(flat_vals, self.shape)
+        np_mod = get_numpy_module()
+        if np_mod is not None:
+            return np_mod.asarray(nested, dtype=self.dtype)
+        from zero_grain._types import _ZERO_JAX_NUMPY_ADAPTER
+
+        return _ZERO_JAX_NUMPY_ADAPTER.asarray(nested, dtype=self.dtype)
+
+    def __array__(self) -> ArrayProtocol:
+        """Convert this metadata descriptor into an array via ``to_numpy()``.
+
+        Returns:
+            ArrayProtocol: Reconstructed array.
+        """
+        return self.to_numpy()
+
 
 class SharedMemoryArray:
     """Wrapper around a NumPy-compatible array backed by POSIX shared memory.
@@ -141,16 +235,45 @@ class SharedMemoryArray:
         Returns:
             SharedMemoryArrayMetadata: Metadata for the allocated shared memory block.
         """
+        raw_bytes = arr.tobytes() if isinstance(arr, BytesExportArrayProtocol) else b""
         num_elements = math.prod(arr.shape) if arr.shape else 1
-        byte_len = max(1, num_elements * _dtype_itemsize(arr.dtype))
-        seg_name, _ = _allocate_shared_memory_segment(byte_len)
-        meta = SharedMemoryArrayMetadata(
+        byte_len = max(1, len(raw_bytes), num_elements * _dtype_itemsize(arr.dtype))
+        seg_name, shm = _allocate_shared_memory_segment(byte_len)
+        if shm is not None and raw_bytes and shm.buf is not None:
+            shm.buf[: len(raw_bytes)] = raw_bytes
+        return SharedMemoryArrayMetadata(
             name=seg_name,
             dtype=arr.dtype,
             shape=arr.shape,
         )
-        _release_shared_memory_segment(seg_name)
-        return meta
+
+    @classmethod
+    def from_metadata(cls, metadata: SharedMemoryArrayMetadata) -> SharedMemoryArray:
+        """Construct a ``SharedMemoryArray`` view bound to an existing ``metadata`` descriptor.
+
+        Args:
+            metadata (SharedMemoryArrayMetadata): Existing shared memory metadata descriptor.
+
+        Returns:
+            SharedMemoryArray: Wrapper bound to ``metadata``.
+        """
+        return cls(name=metadata.name, dtype=metadata.dtype, shape=metadata.shape)
+
+    def to_numpy(self) -> ArrayProtocol:
+        """Reconstruct an ``ArrayProtocol`` from the underlying shared memory segment.
+
+        Returns:
+            ArrayProtocol: Reconstructed array matching ``self.metadata``.
+        """
+        return self.metadata.to_numpy()
+
+    def __array__(self) -> ArrayProtocol:
+        """Convert this ``SharedMemoryArray`` into an array via ``to_numpy()``.
+
+        Returns:
+            ArrayProtocol: Reconstructed array.
+        """
+        return self.metadata.to_numpy()
 
     def unlink_on_del(self) -> None:
         """Mark the shared memory buffer to be unlinked when garbage collected."""
@@ -161,6 +284,7 @@ __all__ = [
     "SharedMemoryArray",
     "SharedMemoryArrayMetadata",
     "_allocate_shared_memory_segment",
+    "_cleanup_all_active_segments",
     "_dtype_itemsize",
     "_release_shared_memory_segment",
 ]

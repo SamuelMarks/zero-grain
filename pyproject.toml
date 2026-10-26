@@ -65,6 +65,7 @@ exclude_lines = [
 
 [tool.pytest.ini_options]
 pythonpath = [
+    ".",
     "src",
     "../zero-orbax/src",
     "../zero-chex/src",
@@ -78,6 +79,7 @@ pythonpath = [
 [tool.mypy]
 python_version = "3.10"
 mypy_path = [
+    ".",
     "src",
     "../zero-orbax/src",
     "../zero-chex/src",

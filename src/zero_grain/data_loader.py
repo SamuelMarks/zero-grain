@@ -20,7 +20,7 @@ from zero_grain.operations import (
 from zero_grain.options import DataLoaderOptions, LoadOptions, ReadOptions
 from zero_grain.record import Record, RecordMetadata
 from zero_grain.samplers import IndexSampler, Sampler, SequentialSampler
-from zero_grain.sharding import NoSharding, ShardOptions
+from zero_grain.sharding import NoSharding, ShardOptions, even_split
 from zero_grain.transforms import (
     Batch,
     FilterTransform,
@@ -88,6 +88,7 @@ class DataLoader(Generic[T_co]):
         read_options: ReadOptions | None = None,
         enable_profiling: bool = False,
         options: DataLoaderOptions | None = None,
+        sequential_slice: bool = False,
     ) -> None:
         """Initialize ``DataLoader``.
 
@@ -104,6 +105,7 @@ class DataLoader(Generic[T_co]):
             read_options (ReadOptions | None): Reader thread and buffer options.
             enable_profiling (bool): Whether profiling is enabled.
             options (DataLoaderOptions | None): Optional legacy ``DataLoaderOptions``.
+            sequential_slice (bool): Whether workers read contiguous sequential slices.
 
         Raises:
             ValueError: If ``worker_count < 0``.
@@ -125,7 +127,9 @@ class DataLoader(Generic[T_co]):
             self.sampler: Sampler | Sequence[int] = sampler
         else:
             ds_len = len(self.data_source)
-            self.sampler = SequentialSampler(num_records=ds_len) if ds_len > 0 else Sampler()
+            self.sampler = (
+                SequentialSampler(num_records=ds_len, shard_options=shard_options) if ds_len > 0 else Sampler()
+            )
         self.operations: tuple[Operation[ElementTree, ElementTree], ...] = tuple(
             normalize_operation(op) for op in operations
         )
@@ -134,6 +138,7 @@ class DataLoader(Generic[T_co]):
         self.shard_options = shard_options
         self.read_options = effective_read_options
         self.enable_profiling = enable_profiling
+        self.sequential_slice = sequential_slice
 
     def __iter__(self) -> DataLoaderIterator[T_co]:
         """Create a new ``DataLoaderIterator`` over this ``DataLoader``.
@@ -153,6 +158,44 @@ class DataLoader(Generic[T_co]):
         return DataLoaderIterator(self)
 
 
+class _LazySamplerSequence:
+    """Lazy O(1)-memory indexable view over ``SequentialSampler`` or ``IndexSampler`` shard records."""
+
+    def __init__(self, sampler: SequentialSampler | IndexSampler) -> None:
+        """Initialize ``_LazySamplerSequence``.
+
+        Args:
+            sampler (SequentialSampler | IndexSampler): Backing sampler instance.
+        """
+        self._sampler = sampler
+        self._start = sampler.shard_options.shard_index
+        self._step = sampler.shard_options.shard_count
+        self._max_index = len(sampler)
+        if self._max_index <= self._start:
+            self._length = 0
+        else:
+            self._length = (self._max_index - 1 - self._start) // self._step + 1
+
+    def __len__(self) -> int:
+        """Return the number of records in the active shard.
+
+        Returns:
+            int: Shard record count.
+        """
+        return self._length
+
+    def __getitem__(self, index: int) -> RecordMetadata:
+        """Return the ``RecordMetadata`` at shard position ``index``.
+
+        Args:
+            index (int): Non-negative shard-relative index.
+
+        Returns:
+            RecordMetadata: Resolved metadata at ``index``.
+        """
+        return self._sampler[self._start + index * self._step]
+
+
 class _WorkerStream:
     """Internal per-worker pipeline execution stream tracking consumed sampler positions."""
 
@@ -161,9 +204,10 @@ class _WorkerStream:
         worker_idx: int,
         worker_total: int,
         data_source: RandomAccessDataSource[ElementTree] | Sequence[ElementTree],
-        sampler_records: Sequence[RecordMetadata],
+        sampler_records: Sequence[RecordMetadata] | _LazySamplerSequence,
         operations: Sequence[Operation[ElementTree, ElementTree]],
         initial_last_seen: int,
+        sequential_slice: bool = False,
     ) -> None:
         """Initialize ``_WorkerStream``.
 
@@ -174,6 +218,7 @@ class _WorkerStream:
             sampler_records (Sequence[RecordMetadata]): Full sequence of sampler metadata items.
             operations (Sequence[Operation[ElementTree, ElementTree]]): Normalized pipeline operations.
             initial_last_seen (int): Initial ``last_seen_indices`` value for this worker.
+            sequential_slice (bool): Whether this worker reads a contiguous slice of ``sampler_records``.
         """
         self.worker_idx = worker_idx
         self.worker_total = worker_total
@@ -181,6 +226,7 @@ class _WorkerStream:
         self.sampler_records = sampler_records
         self.operations = operations
         self.last_seen_index = initial_last_seen
+        self.sequential_slice = sequential_slice
         self._emitted_count = 0
         self._iter: Iterator[Record[ElementTree]] = self._build_pipeline(min_sampler_index=initial_last_seen)
 
@@ -203,9 +249,23 @@ class _WorkerStream:
             Yields:
                 Record[ElementTree]: Source records for this worker.
             """
-            pos = self.worker_idx
             total_records = len(self.sampler_records)
-            while pos < total_records:
+            if self.sequential_slice and self.worker_total > 1:
+                start_pos, end_pos = even_split(
+                    total_records,
+                    ShardOptions(
+                        shard_index=self.worker_idx,
+                        shard_count=self.worker_total,
+                        drop_remainder=False,
+                    ),
+                )
+                step_pos = 1
+            else:
+                start_pos = self.worker_idx
+                end_pos = total_records
+                step_pos = self.worker_total
+            pos = start_pos
+            while pos < end_pos:
                 meta = self.sampler_records[pos]
                 meta_idx = meta.index if meta.index is not None else pos
                 if meta_idx > min_sampler_index:
@@ -218,7 +278,7 @@ class _WorkerStream:
                         rng=meta.rng,
                     )
                     yield Record[ElementTree](metadata=record_meta, data=raw_data)
-                pos += self.worker_total
+                pos += step_pos
 
         stream: Iterator[Record[ElementTree]] = _source_gen()
         for op in self.operations:
@@ -266,7 +326,7 @@ class DataLoaderIterator(Generic[T_co]):
         self.data_source: RandomAccessDataSource[T_co] | Sequence[T_co] = self.data_loader.data_source
         self._prefetch_started = False
 
-        self._sampler_records: list[RecordMetadata] = self._materialize_sampler()
+        self._sampler_records: Sequence[RecordMetadata] | _LazySamplerSequence = self._materialize_sampler()
         self._effective_workers = max(1, self.worker_count)
         self._last_worker_index = -1
         self._next_worker_turn = 0
@@ -277,12 +337,16 @@ class DataLoaderIterator(Generic[T_co]):
         if state is not None:
             self.set_state(state)
 
-    def _materialize_sampler(self) -> list[RecordMetadata]:
-        """Collect all ``RecordMetadata`` entries from ``self.sampler``.
+    def _materialize_sampler(self) -> Sequence[RecordMetadata] | _LazySamplerSequence:
+        """Return a lazy or materialized sequence of ``RecordMetadata`` entries from ``self.sampler``.
 
         Returns:
-            list[RecordMetadata]: Ordered list of ``RecordMetadata`` items.
+            Sequence[RecordMetadata] | _LazySamplerSequence: Ordered sequence of ``RecordMetadata`` items.
         """
+        if type(self.sampler) in (SequentialSampler, IndexSampler) and isinstance(
+            self.sampler, (SequentialSampler, IndexSampler)
+        ):
+            return _LazySamplerSequence(self.sampler)
         records: list[RecordMetadata] = []
         for item in self.sampler:
             if isinstance(item, RecordMetadata):
@@ -321,6 +385,7 @@ class DataLoaderIterator(Generic[T_co]):
                 sampler_records=self._sampler_records,
                 operations=self.data_loader.operations,
                 initial_last_seen=indices.get(str(w_idx), defaults.get(str(w_idx), -1)),
+                sequential_slice=self.data_loader.sequential_slice,
             )
             for w_idx in range(self._effective_workers)
         ]

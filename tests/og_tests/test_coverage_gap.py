@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from typing import NamedTuple
+from unittest import mock
 import numpy as np
 import pytest
 from zero_grain._types import ElementTree
+from zero_grain.options import DatasetOptions
 from zero_grain.python import (
     BatchOperation,
     CopyNumPyArrayToSharedMemoryOperation,
@@ -85,10 +87,18 @@ def test_batch_elements_lists() -> None:
 
 def test_batch_elements_tuple_ndarray() -> None:
     """Verify ``_batch_elements`` handles tuples containing NumPy arrays."""
-    batch = [(np.array([1]), 2), (np.array([3]), 4)]
+    batch = [(np.array([1], dtype=np.int32), 2), (np.array([3], dtype=np.int32), 4)]
     res = _batch_elements(batch)
     assert isinstance(res, tuple)
     assert len(res) == 2
+    assert isinstance(res[0], np.ndarray)
+    assert res[0].dtype == np.dtype("int32")
+    assert res[0].shape == (2, 1)
+    assert res[0].tolist() == [[1], [3]]
+    assert isinstance(res[1], np.ndarray)
+    assert res[1].dtype == np.dtype("int64")
+    assert res[1].shape == (2,)
+    assert res[1].tolist() == [2, 4]
 
 
 def test_batch_elements_except() -> None:
@@ -167,17 +177,79 @@ def test_datasources_misc() -> None:
 
 
 def test_sharding_misc() -> None:
-    """Verify ``ShardByJaxProcess`` properties."""
+    """Verify ``ShardByJaxProcess`` properties and sharded interval splitting."""
+    import zero_chex as chex
+    from zero_grain.sharding import even_split
+
     shard = ShardByJaxProcess(drop_remainder=True)
     assert shard.shard_index == 0
     assert shard.shard_count == 1
     assert shard.drop_remainder is True
+    assert even_split(7, shard) == (0, 7)
+
+    chex.set_n_cpu_devices(2)
+    try:
+        shard_multi_drop = ShardByJaxProcess(drop_remainder=True)
+        assert shard_multi_drop.shard_index == 0
+        assert shard_multi_drop.shard_count == 2
+        assert even_split(7, shard_multi_drop) == (0, 3)
+
+        shard_multi_keep = ShardByJaxProcess(drop_remainder=False)
+        assert even_split(7, shard_multi_keep) == (0, 4)
+    finally:
+        chex.set_n_cpu_devices(1)
 
 
 def test_options_misc() -> None:
-    """Verify ``MultiprocessingOptions`` instantiation."""
-    opts = MultiprocessingOptions(num_workers=1)
+    """Verify ``MultiprocessingOptions`` and ``DatasetOptions`` filter threshold enforcement."""
+    opts = MultiprocessingOptions(num_workers=1, per_worker_buffer_size=4, enable_profiling=True)
     assert opts.num_workers == 1
+    assert opts.per_worker_buffer_size == 4
+    assert opts.enable_profiling is True
+    dl_prof = DataLoader(
+        data_source=[10, 20, 30],
+        sampler=SequentialSampler(3),
+        worker_count=opts.num_workers,
+        worker_buffer_size=opts.per_worker_buffer_size,
+        enable_profiling=opts.enable_profiling,
+    )
+    assert list(dl_prof) == [10, 20, 30]
+
+    ds_opts_warn = DatasetOptions(filter_warn_threshold_ratio=0.5, filter_raise_threshold_ratio=0.9)
+    with mock.patch("logging.warning") as mock_warn_below:
+        ds_opts_warn.check_filter_ratio(0, 0)
+        ds_opts_warn.check_filter_ratio(4, 1)
+        mock_warn_below.assert_not_called()
+
+    with mock.patch("logging.warning") as mock_warn:
+        op_warn: FilterOperation[int] = FilterOperation(lambda x: x > 2, dataset_options=ds_opts_warn)
+        kept = list(
+            op_warn(
+                [
+                    Record(RecordMetadata(0, 0), 1),
+                    Record(RecordMetadata(1, 1), 2),
+                    Record(RecordMetadata(2, 2), 3),
+                ]
+            )
+        )
+        assert [r.data for r in kept] == [3]
+        assert [r.metadata.index for r in kept if r.metadata is not None] == [2]
+        assert [r.metadata.record_key for r in kept if r.metadata is not None] == [None]
+        mock_warn.assert_called_once()
+        assert "0.67 (2/3)" in str(mock_warn.call_args[0][0])
+
+    ds_opts_raise = DatasetOptions(filter_raise_threshold_ratio=0.5)
+    op_raise: FilterOperation[int] = FilterOperation(lambda x: x > 2, dataset_options=ds_opts_raise)
+    with pytest.raises(ValueError, match="filter_raise_threshold_ratio"):
+        list(
+            op_raise(
+                [
+                    Record(RecordMetadata(0, 0), 1),
+                    Record(RecordMetadata(1, 1), 2),
+                    Record(RecordMetadata(2, 2), 3),
+                ]
+            )
+        )
 
 
 def test_index_sampler_seed_type() -> None:
@@ -264,42 +336,59 @@ def test_dataset_misc() -> None:
     ds2 = ds.seed(42)
     assert ds2._seed == 42
     assert ds._seed is None
+    rm_seeded: Dataset[int] = ds2.random_map(
+        lambda x, rng: (int(x) if isinstance(x, int) else 0) + rng.integers(10, 50)
+    )
+    rm_explicit: Dataset[int] = ds.random_map(
+        lambda x, rng: (int(x) if isinstance(x, int) else 0) + rng.integers(10, 50),
+        seed=42,
+    )
+    assert list(rm_seeded) == list(rm_explicit)
 
     ds3 = ds.shuffle(12)
     assert ds3._seed == 12
+    shuffled_vals = [int(x) for x in ds3 if isinstance(x, int)]
+    assert sorted(shuffled_vals) == [1, 2, 3]
+    assert [ds3[i] for i in range(3)] == shuffled_vals
 
     it_ds = ds.to_iter_dataset()
     assert isinstance(it_ds, IterDataset)
-    assert str(it_ds) != ""
+    assert "DataLoader" in str(it_ds)
     it_ds_iter = iter(it_ds)
-    assert next(it_ds_iter) == 1
+    assert list(it_ds_iter) == [1, 2, 3]
 
     res = apply_transformations(ds, MapOperation(lambda x: int(x) * 2 if isinstance(x, int) else x))
     assert len(res.operations) == 1
+    assert [res[i] for i in range(3)] == [2, 4, 6]
     assert list(res) == [2, 4, 6]
     assert get_element_spec(ds) == "int"
 
     ds4: Dataset[int] = ds.map(lambda x: int(x) + 10 if isinstance(x, int) else x)
     assert len(ds4.operations) == 1
+    assert [ds4[i] for i in range(3)] == [11, 12, 13]
     assert list(ds4) == [11, 12, 13]
 
     ds5: Dataset[int] = ds.map_with_index(lambda i, x: i + (int(x) * 10 if isinstance(x, int) else 0))
     assert len(ds5.operations) == 1
+    assert [ds5[i] for i in range(3)] == [10, 21, 32]
     assert list(ds5) == [10, 21, 32]
 
     ds6 = ds.filter(lambda x: isinstance(x, int) and x >= 2)
     assert len(ds6.operations) == 1
+    assert [ds6[i] for i in range(3)] == [None, 2, 3]
     assert list(ds6) == [2, 3]
 
     ds7: Dataset[list[ElementTree]] = ds.batch(2, batch_fn=lambda xs: list(xs))
     assert len(ds7.operations) == 1
+    assert [ds7[i] for i in range(len(ds7))] == [[1, 2], [3]]
     assert list(ds7) == [[1, 2], [3]]
 
     rng = Dataset.range(10)
     assert len(rng) == 10
-    assert len(Dataset.range(1, 10)) == 9
-    assert len(Dataset.range(1, 10, 2)) == 5
-    assert ds[0] == 1
+    assert list(rng) == list(range(10))
+    assert list(Dataset.range(1, 10)) == list(range(1, 10))
+    assert list(Dataset.range(1, 10, 2)) == [1, 3, 5, 7, 9]
+    assert [ds[i] for i in range(3)] == [1, 2, 3]
 
 
 def test_no_sharding_repr() -> None:
@@ -310,10 +399,20 @@ def test_no_sharding_repr() -> None:
 
 def test_seq_sampler_repr() -> None:
     """Verify ``SequentialSampler.__repr__`` and indexing."""
-    ss = SequentialSampler(10, NoSharding(0, 2, True))
-    assert "SequentialSampler" in repr(ss)
-    assert len(list(iter(ss))) == 5
+    ss = SequentialSampler(10, NoSharding(0, 2, True), seed=11)
+    assert repr(ss) == (
+        "SequentialSampler(num_records=10, shard_options=NoSharding(shard_index=0, shard_count=2, drop_remainder=True))"
+    )
+    assert len(ss) == 10
+    assert [m.record_key for m in ss] == [0, 2, 4, 6, 8]
+    assert [m.index for m in ss] == [0, 2, 4, 6, 8]
     assert ss[0].record_key == 0
+    assert ss[0].index == 0
+    assert ss[0].rng is not None
+    assert ss[4].record_key == 4
+    assert ss[4].index == 4
+    with pytest.raises(IndexError):
+        _ = ss[10]
 
 
 def test_misc_classes() -> None:
@@ -325,6 +424,9 @@ def test_misc_classes() -> None:
         next(empty_it)
     dl = load([1, 2], batch_size=2)
     assert dl.worker_count == 0
+    dl_batches = list(dl)
+    assert len(dl_batches) == 1
+    assert isinstance(dl_batches[0], np.ndarray) and dl_batches[0].tolist() == [1, 2]
 
 
 def test_operations_with_none() -> None:
@@ -368,11 +470,12 @@ def test_load_batch_size_1() -> None:
 
 def test_batch_and_pad_ndarray() -> None:
     """Verify ``batch_and_pad`` with a NumPy array element."""
-    elements = [np.array([1, 2])]
+    elements = [np.array([1, 2], dtype=np.int32)]
     res = batch_and_pad(elements, 2)
     assert isinstance(res, np.ndarray)
+    assert res.dtype == np.dtype("int32")
     assert res.shape == (2, 2)
-    assert res[1][0] == 0
+    assert res.tolist() == [[1, 2], [0, 0]]
 
 
 def test_batch_and_pad_dtype() -> None:
@@ -383,15 +486,25 @@ def test_batch_and_pad_dtype() -> None:
 
         dtype = np.float32
 
+        def __init__(self, values: list[float]) -> None:
+            """Initialize ``MockTensor`` with ``values``.
+
+            Args:
+                values (list[float]): 1D float values.
+            """
+            self._values = values
+
         def __array__(self) -> np.ndarray:
             """Convert ``MockTensor`` to a NumPy array.
 
             Returns:
                 np.ndarray: 1D float32 array.
             """
-            return np.array([1, 2], dtype=self.dtype)
+            return np.array(self._values, dtype=self.dtype)
 
-    elements = [MockTensor()]
-    res = batch_and_pad(elements, 2)
+    elements = [MockTensor([1.5, 2.5]), MockTensor([3.5, 4.5])]
+    res = batch_and_pad(elements, 3)
     assert isinstance(res, np.ndarray)
-    assert len(res) == 2
+    assert res.dtype == np.dtype("float32")
+    assert res.shape == (3, 2)
+    assert res.tolist() == [[1.5, 2.5], [3.5, 4.5], [0.0, 0.0]]

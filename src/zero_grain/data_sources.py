@@ -6,8 +6,9 @@ from collections.abc import Iterator, Sequence
 import dataclasses
 import os
 from pathlib import Path
-from typing import Generic
-from zero_grain._types import ElementTree, T_co
+import tempfile
+from typing import Generic, overload
+from zero_grain._types import ElementTree, SliceProtocol, T_co
 
 _DEFAULT_SHARD_EXAMPLES = 5
 _DIGITS_SHARD_RECORDS: dict[str, tuple[str, ...]] = {
@@ -21,13 +22,15 @@ def ensure_testdata(testdata_dir: Path | None = None) -> Path:
 
     Args:
         testdata_dir (Path | None): Target ``testdata`` directory. Defaults to
-            ``src/zero_grain/_src/python/testdata``.
+            a temporary directory under ``tempfile.gettempdir()``.
 
     Returns:
         Path: Path to the populated ``testdata`` directory.
     """
     target_dir = (
-        testdata_dir if testdata_dir is not None else Path(__file__).resolve().parent / "_src" / "python" / "testdata"
+        testdata_dir
+        if testdata_dir is not None
+        else Path(tempfile.gettempdir()) / "zero_grain_testdata" / "_src" / "python" / "testdata"
     )
     target_dir.mkdir(parents=True, exist_ok=True)
     for shard_name, records in _DIGITS_SHARD_RECORDS.items():
@@ -191,16 +194,48 @@ class SharedMemoryDataSource(RandomAccessDataSource[T_co]):
         """
         return len(self._elements)
 
+    @overload
     def __getitem__(self, record_key: int) -> T_co:
-        """Retrieve the element at ``record_key``.
+        """Retrieve the element at integer index ``record_key``.
 
         Args:
-            record_key (int): Zero-based index into the stored elements.
+            record_key (int): Integer index (supports negative indexing).
 
         Returns:
             T_co: Element at ``record_key``.
         """
-        return self._elements[record_key]
+
+    @overload
+    def __getitem__(self, record_key: SliceProtocol) -> list[T_co]:
+        """Retrieve a slice of elements matching ``record_key``.
+
+        Args:
+            record_key (SliceProtocol): Slice object.
+
+        Returns:
+            list[T_co]: Sliced list of elements.
+        """
+
+    def __getitem__(self, record_key: int | SliceProtocol) -> T_co | list[T_co]:
+        """Retrieve the element or slice at ``record_key``.
+
+        Args:
+            record_key (int | SliceProtocol): Integer index or slice into the stored elements.
+
+        Returns:
+            T_co | list[T_co]: Element or list of elements at ``record_key``.
+
+        Raises:
+            IndexError: If an integer ``record_key`` is out of bounds.
+        """
+        total = len(self._elements)
+        if isinstance(record_key, SliceProtocol):
+            start, stop, step = record_key.indices(total)
+            return [self._elements[i] for i in range(start, stop, step)]
+        resolved = record_key + total if record_key < 0 else record_key
+        if resolved < 0 or resolved >= total:
+            raise IndexError(f"SharedMemoryDataSource index {record_key} out of range for length {total}")
+        return self._elements[resolved]
 
     def __iter__(self) -> Iterator[T_co]:
         """Iterate sequentially over all stored elements.
@@ -291,10 +326,10 @@ class ArrayRecordDataSource(RandomAccessDataSource[bytes]):
             return [str(base_offset + skip + i).encode("utf-8") for i in range(count)]
 
         file_path = Path(shard)
-        if not file_path.is_file() and file_path.name in _DIGITS_SHARD_RECORDS and file_path.parent.name == "testdata":
-            ensure_testdata(file_path.parent)
         if file_path.is_file():
             return file_path.read_bytes().splitlines()
+        if file_path.name in _DIGITS_SHARD_RECORDS:
+            return [rec.encode("utf-8") for rec in _DIGITS_SHARD_RECORDS[file_path.name]]
         return [str(base_offset + i).encode("utf-8") for i in range(_DEFAULT_SHARD_EXAMPLES)]
 
     @classmethod

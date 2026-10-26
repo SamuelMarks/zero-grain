@@ -48,22 +48,7 @@ def _collect_exported_names() -> set[str]:
     """
     names: set[str] = set(dir(zero_grain)) | set(dir(zero_grain.python))
     root_dir = Path("src/zero_grain")
-    for mod_path in (
-        root_dir / "__init__.py",
-        root_dir / "python" / "__init__.py",
-        root_dir / "transforms.py",
-        root_dir / "operations.py",
-        root_dir / "data_loader.py",
-        root_dir / "data_sources.py",
-        root_dir / "dataset.py",
-        root_dir / "checkpoint.py",
-        root_dir / "options.py",
-        root_dir / "record.py",
-        root_dir / "samplers.py",
-        root_dir / "sharding.py",
-        root_dir / "shared_memory_array.py",
-        root_dir / "testing.py",
-    ):
+    for mod_path in sorted(root_dir.rglob("*.py")):
         names |= _extract_module_exports(mod_path)
     return names
 

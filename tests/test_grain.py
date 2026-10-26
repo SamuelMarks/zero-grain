@@ -107,8 +107,8 @@ from zero_grain.shared_memory_array import (
 class _SamplePair(NamedTuple):
     """Sample NamedTuple for testing PyTree batching."""
 
-    left: int | str
-    right: int | str
+    left: int | str | list[int]
+    right: int | str | list[int]
 
 
 @dataclasses.dataclass
@@ -457,26 +457,55 @@ def test_transforms_and_operations() -> None:
 
     shm_op = CopyNumPyArrayToSharedMemoryOperation()
     shm_alias = CopyNumPyArrayToSharedMemory()
-    shm_rec: Record[ElementTree] = Record(metadata=RecordMetadata(index=0), data=np.array([1, 2]))
+    shm_input = np.array([1, 2], dtype=np.int32)
+    shm_rec: Record[ElementTree] = Record(metadata=RecordMetadata(index=0), data=shm_input)
     shm_out = list(shm_op([shm_rec]))
     assert isinstance(shm_out[0].data, SharedMemoryArrayMetadata)
+    assert shm_out[0].data.shape == (2,)
+    assert shm_out[0].data.dtype == np.dtype("int32")
+    shm_handle_0 = shared_memory.SharedMemory(name=shm_out[0].data.name)
+    try:
+        shm_view_0: np.ndarray = np.ndarray((2,), dtype=np.int32, buffer=shm_handle_0.buf)
+        assert shm_view_0.tolist() == [1, 2]
+    finally:
+        shm_handle_0.close()
     shm_out[0].data.close_and_unlink()
-    shm_alias_meta = shm_alias.map(np.array([3, 4]))
+
+    shm_alias_meta = shm_alias.map(np.array([3, 4], dtype=np.int64))
     assert isinstance(shm_alias_meta, SharedMemoryArrayMetadata)
+    assert shm_alias_meta.shape == (2,)
+    assert shm_alias_meta.dtype == np.dtype("int64")
+    shm_handle_1 = shared_memory.SharedMemory(name=shm_alias_meta.name)
+    try:
+        shm_view_1: np.ndarray = np.ndarray((2,), dtype=np.int64, buffer=shm_handle_1.buf)
+        assert shm_view_1.tolist() == [3, 4]
+    finally:
+        shm_handle_1.close()
     shm_alias_meta.close_and_unlink()
 
-    assert np.array_equal(_batch_elements([1, 2]), np.array([1, 2]))
+    batched_ints = _batch_elements([1, 2])
+    assert isinstance(batched_ints, np.ndarray)
+    assert batched_ints.dtype == np.dtype("int64")
+    assert batched_ints.tolist() == [1, 2]
     assert _batch_elements([]) == []
     assert batch_and_pad([], 2) == []
     padded_pair = batch_and_pad([_SamplePair(1, 2)], 2)
     assert isinstance(padded_pair, _SamplePair)
+    assert isinstance(padded_pair.left, np.ndarray) and padded_pair.left.dtype == np.dtype("int64")
+    assert padded_pair.left.tolist() == [1, 0]
+    assert isinstance(padded_pair.right, np.ndarray) and padded_pair.right.dtype == np.dtype("int64")
+    assert padded_pair.right.tolist() == [2, 0]
     padded_tuple = batch_and_pad([(1.5, "a")], 2)
-    assert isinstance(padded_tuple, tuple)
+    assert isinstance(padded_tuple, tuple) and len(padded_tuple) == 2
+    assert isinstance(padded_tuple[0], np.ndarray) and padded_tuple[0].dtype == np.dtype("float64")
+    assert padded_tuple[0].tolist() == [1.5, 0.0]
+    assert isinstance(padded_tuple[1], np.ndarray) and padded_tuple[1].tolist() == ["a", "0"]
     padded_bool = batch_and_pad([True], 2)
-    assert isinstance(padded_bool, np.ndarray) and padded_bool.tolist() == [True, False]
+    assert isinstance(padded_bool, np.ndarray) and padded_bool.dtype == np.dtype("bool")
+    assert padded_bool.tolist() == [True, False]
     padded_list = batch_and_pad([[1, 2]], 2)
-    assert isinstance(padded_list, (list, np.ndarray))
-    assert len(padded_list) == 2
+    assert isinstance(padded_list, np.ndarray) and padded_list.dtype == np.dtype("int64")
+    assert padded_list.tolist() == [[1, 0], [2, 0]]
 
     mapped = map_tree(lambda x: int(x) * 10 if isinstance(x, int) else x, _SamplePair(1, 2))
     assert mapped == _SamplePair(10, 20)
@@ -548,6 +577,9 @@ def test_leaf_type_spec_and_shared_memory_branches(monkeypatch: pytest.MonkeyPat
     fallback_name, seg = _allocate_shared_memory_segment(16)
     assert fallback_name.startswith("zero_grain_shm_")
     assert seg is None
+    fallback_meta = SharedMemoryArray.from_array(np.array([10, 20], dtype=np.int32))
+    assert fallback_meta.name.startswith("zero_grain_shm_")
+    assert fallback_meta.shape == (2,)
     _release_shared_memory_segment("nonexistent_segment")
 
 
@@ -811,14 +843,21 @@ def test_utils_and_misc() -> None:
     assert dl.worker_count == 1
     batches = list(dl)
     assert len(batches) == 2
+    assert isinstance(batches[0], np.ndarray) and batches[0].dtype == np.dtype("int64")
+    assert batches[0].tolist() == [1, 2]
+    assert isinstance(batches[1], np.ndarray) and batches[1].dtype == np.dtype("int64")
+    assert batches[1].tolist() == [3, 4]
 
     sma = SharedMemoryArray(name="custom_shm", shape=(2, 3), dtype="int32")
+    assert sma.metadata.name == "custom_shm"
     assert sma.metadata.shape == (2, 3)
+    assert sma.metadata.dtype == "int32"
     sma.unlink_on_del()
-    sm_meta = shared_memory_array.SharedMemoryArrayMetadata(name="seg", shape=(2,))
-    assert sm_meta == SharedMemoryArrayMetadata(name="seg", shape=(2,))
-    assert sm_meta != SharedMemoryArrayMetadata(name="other", shape=(2,))
-    assert "SharedMemoryArrayMetadata" in repr(sm_meta)
+    assert sma.metadata.name == ""
+    sm_meta = shared_memory_array.SharedMemoryArrayMetadata(name="seg", shape=(2,), dtype="float32")
+    assert sm_meta == SharedMemoryArrayMetadata(name="seg", shape=(2,), dtype="float32")
+    assert sm_meta != SharedMemoryArrayMetadata(name="other", shape=(2,), dtype="float32")
+    assert repr(sm_meta) == "SharedMemoryArrayMetadata(name='seg', dtype='float32', shape=(2,))"
     sm_meta.close_and_unlink()
     assert sm_meta.name == ""
 
@@ -826,18 +865,23 @@ def test_utils_and_misc() -> None:
     inst = FakeCls(1, k=2)
     assert inst.args == (1,)
     assert inst.kwargs == {"k": 2}
+    assert len(inst) == 1
+    assert inst[0] == (0, 0)
 
     # Behavioral verification of module namespace exports
     py_loader = python.DataLoader(data_source=InMemoryDataSource([5, 6]))
     assert list(py_loader) == [5, 6]
     tr_batch: BatchTransform[int, list[int]] = transforms.BatchTransform(batch_size=2)
     assert tr_batch.batch_size == 2
+    assert tr_batch.drop_remainder is False
+    filt_nonzero_op: FilterOperation[ElementTree] = FilterOperation(lambda x: isinstance(x, int) and x != 0)
     manual_fd: FilterDataset[int] = FilterDataset(
         ds,
-        _local_ops_override=(FilterOperation(lambda x: isinstance(x, int) and x != 0),),
+        _operations_override=(filt_nonzero_op,),
+        _local_ops_override=(filt_nonzero_op,),
     )
-    assert manual_fd[0] is None
-    assert manual_fd[1] == 1
+    assert [manual_fd[i] for i in range(len(manual_fd))] == [None, 1, 2, 3]
+    assert list(manual_fd) == [1, 2, 3]
 
 
 def test_ecosystem_orbax_checkpointing(tmp_path: Path) -> None:
@@ -870,8 +914,10 @@ def test_ecosystem_orbax_checkpointing(tmp_path: Path) -> None:
     assert handler.structure(tmp_path / "nonexistent_dir") == {}
     meta_local = handler.metadata(local_dir)
     assert isinstance(meta_local, dict) and meta_local.get("version") == 2
-    assert handler.metadata(None) is not None
-    assert handler.metadata(tmp_path / "nonexistent_dir") is not None
+    meta_none = handler.metadata(None)
+    assert isinstance(meta_none, dict) and meta_none == meta_local
+    meta_nonexistent = handler.metadata(tmp_path / "nonexistent_dir")
+    assert isinstance(meta_nonexistent, dict) and meta_nonexistent.get("finalized") is True
 
     it1_restored = iter(dl)
     handler.restore(local_dir, PyGrainCheckpointRestore(it1_restored))
@@ -1073,6 +1119,7 @@ def test_ecosystem_chex_jax_flax_optax_integration() -> None:
     )
     model = nnx.Linear(2, 1, rngs=nnx.Rngs(0))
     assert model.bias is not None
+    initial_bias_list = model.bias.value.tolist()
 
     for batch in dl_train:
         assert isinstance(batch, TrainingSample)
@@ -1088,11 +1135,18 @@ def test_ecosystem_chex_jax_flax_optax_integration() -> None:
         model.kernel.value = new_k
         model.bias.value = new_b
 
+    assert model.bias.value.tolist() != initial_bias_list
 
-def test_v005_methods_and_experimental_datasets() -> None:
-    """Verify v0.0.5 API surface including ``Transformation``, ``SelectionWithReplacementMap``, ``MapDataset``, ``IterDataset``, and ``experimental``."""
+
+def test_v005_methods_and_experimental_datasets(tmp_path: Path) -> None:
+    """Verify v0.0.5 API surface including ``Transformation``, ``SelectionWithReplacementMap``, ``MapDataset``, ``IterDataset``, and ``experimental``.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
     tr_base = Transformation(1, key="v")
-    assert isinstance(tr_base, Transformation)
+    assert tr_base._args == (1,)
+    assert tr_base._kwargs == {"key": "v"}
     assert issubclass(MapTransform, Transformation)
     assert issubclass(Batch, Transformation)
 
@@ -1102,6 +1156,7 @@ def test_v005_methods_and_experimental_datasets() -> None:
     seq_multi = SequentialSampler(num_records=2, num_epochs=2)
     assert len(seq_multi) == 4
     assert [seq_multi[i].record_key for i in range(4)] == [0, 1, 0, 1]
+    assert [seq_multi[i].index for i in range(4)] == [0, 1, 2, 3]
 
     # SelectionWithReplacementMap branches
     sel_empty = SelectionWithReplacementMap()
@@ -1110,18 +1165,24 @@ def test_v005_methods_and_experimental_datasets() -> None:
     sel_default_w = SelectionWithReplacementMap(parent_lengths=[2, 2])
     assert len(sel_default_w) == 4
     assert sel_default_w.weights == (0.5, 0.5)
+    assert [sel_default_w[i] for i in range(4)] == [(0, 0), (1, 0), (0, 1), (1, 1)]
     sel_custom = SelectionWithReplacementMap(
         parent_lengths=[2, 3],
-        weights=[3.0, 1.0, "ignored"],
+        weights=[3.0, 1.0],
         total_size=6,
     )
     assert len(sel_custom) == 6
-    assert sel_custom[0][0] == 0
+    assert sel_custom.weights == (0.75, 0.25)
+    assert [sel_custom[i] for i in range(6)] == [(0, 0), (0, 1), (1, 0), (0, 0), (0, 1), (0, 0)]
     sel_zero_total = SelectionWithReplacementMap(parent_lengths=[2, 2], total_size=0)
     assert len(sel_zero_total) == 0
     sel_zero_parents = SelectionWithReplacementMap(parent_lengths=[0, 0], weights=[1.0, 1.0], total_size=3)
     assert len(sel_zero_parents) == 0
     assert SelectionWithReplacementMap._build_weighted_replacement_mapping([2, 2], [0.5], 2) == [(0, 0), (1, 0)]
+    with pytest.raises(ValueError, match="parent_lengths must be non-negative"):
+        DatasetSelectionMap(parent_lengths=[2, -1])
+    with pytest.raises(ValueError, match="weights length 1 must match parent_lengths length 2"):
+        SelectionWithReplacementMap(parent_lengths=[2, 2], weights=[1.0, "ignored"])
     with pytest.raises(ValueError, match="weights must be non-negative"):
         SelectionWithReplacementMap(parent_lengths=[2, 2], weights=[-1.0, 2.0])
     with pytest.raises(ValueError, match="sum of weights must be positive"):
@@ -1130,19 +1191,19 @@ def test_v005_methods_and_experimental_datasets() -> None:
     # MapDataset.source descriptor (class and instance access + assignment)
     ds_src = MapDataset.source([10, 20, 30])
     assert list(ds_src) == [10, 20, 30]
-    assert len(ds_src.source) == 3
+    assert [ds_src.source[i] for i in range(len(ds_src.source))] == [10, 20, 30]
     ds_src.source = InMemoryDataSource([40, 50])
     assert list(ds_src) == [40, 50]
 
     # MapDataset.mix and MapDataset.select_from_datasets
-    assert len(MapDataset.mix([])) == 0
-    assert len(MapDataset.select_from_datasets([], sel_default_w)) == 0
+    assert list(MapDataset.mix([])) == []
+    assert list(MapDataset.select_from_datasets([], sel_default_w)) == []
     m1 = MapDataset.source([1, 2])
     m2 = MapDataset.source([10, 20])
     mixed_uniform = MapDataset.mix([m1, m2])
     assert list(mixed_uniform) == [1, 10, 2, 20]
     mixed_weighted = MapDataset.mix([m1, m2], weights=[0.75, 0.25])
-    assert len(mixed_weighted) == 4
+    assert list(mixed_weighted) == [1, 2, 10, 1]
     single_sel = MapDataset.select_from_datasets([m1], DatasetSelectionMap(parent_lengths=[2]))
     assert list(single_sel) == [1, 2]
 
@@ -1150,8 +1211,14 @@ def test_v005_methods_and_experimental_datasets() -> None:
     shuffled_m1 = MapDataset.range(4).shuffle(seed=9)
     rep_reassemble = shuffled_m1.repeat(2, reassemble_every_epoch=True)
     rep_fixed = shuffled_m1.repeat(2, reassemble_every_epoch=False)
-    assert len(rep_reassemble) == 8
-    assert list(rep_fixed)[:4] == list(rep_fixed)[4:]
+    rep_reassemble_list = list(rep_reassemble)
+    rep_fixed_list = list(rep_fixed)
+    assert len(rep_reassemble_list) == 8
+    assert sorted(int(x) for x in rep_reassemble_list[:4] if isinstance(x, int)) == [0, 1, 2, 3]
+    assert sorted(int(x) for x in rep_reassemble_list[4:] if isinstance(x, int)) == [0, 1, 2, 3]
+    assert rep_reassemble_list[:4] != rep_reassemble_list[4:]
+    assert rep_fixed_list[:4] == rep_fixed_list[4:]
+    assert rep_fixed_list[:4] == list(shuffled_m1)
 
     filtered_m = MapDataset.range(4).filter(lambda x: isinstance(x, int) and x % 2 == 0)
     with_nones = list(filtered_m.to_iter_dataset(allow_nones=True))
@@ -1169,8 +1236,10 @@ def test_v005_methods_and_experimental_datasets() -> None:
 
     inherited_iter = IterDataset(prefetched_iter)
     assert inherited_iter.sequential_slice is True
+    assert list(inherited_iter) == [1, 2]
     inherited_nones = IterDataset(filtered_m.to_iter_dataset(allow_nones=True))
     assert inherited_nones.allow_nones is True
+    assert list(inherited_nones) == [0, None, 2, None]
 
     s1: IterDataset[int] = m1.to_iter_dataset().map(lambda x: x * 2 if isinstance(x, int) else 0)
     s2: IterDataset[int] = s1.random_map(
@@ -1182,9 +1251,31 @@ def test_v005_methods_and_experimental_datasets() -> None:
     stream_ds: IterDataset[list[int]] = s4.prefetch(MultiprocessingOptions(num_workers=0)).mp_prefetch()
     stream_batches = list(stream_ds)
     assert len(stream_batches) == 1
+    assert isinstance(stream_batches[0], np.ndarray) and stream_batches[0].dtype == np.dtype("int64")
+    assert stream_batches[0].tolist() == [2, 4]
 
     mixed_iter = IterDataset.mix([m1.to_iter_dataset(), m2], weights=[0.5, 0.5])
-    assert len(list(mixed_iter)) == 4
+    assert list(mixed_iter) == [1, 10, 2, 20]
+    multi_parent_iter = IterDataset([m1.to_iter_dataset(), m2])
+    assert list(multi_parent_iter) == [1, 10, 2, 20]
+
+    # BatchDataset followed by .slice(), .repeat(), and .shuffle()
+    batched_sliced: MapDataset[list[int]] = MapDataset.range(6).batch(2).slice(slice(1, 3))
+    batched_sliced_items = list(batched_sliced)
+    assert len(batched_sliced_items) == 2
+    assert all(isinstance(b, np.ndarray) and b.dtype == np.dtype("int64") for b in batched_sliced_items)
+    assert [b.tolist() for b in batched_sliced_items if isinstance(b, np.ndarray)] == [[2, 3], [4, 5]]
+
+    batched_repeated: MapDataset[list[int]] = MapDataset.range(4).batch(2).repeat(2)
+    batched_repeated_items = list(batched_repeated)
+    assert len(batched_repeated_items) == 4
+    assert all(isinstance(b, np.ndarray) and b.dtype == np.dtype("int64") for b in batched_repeated_items)
+    assert [b.tolist() for b in batched_repeated_items if isinstance(b, np.ndarray)] == [[0, 1], [2, 3], [0, 1], [2, 3]]
+
+    batched_shuffled: MapDataset[list[int]] = MapDataset.range(6).batch(2).shuffle(seed=7)
+    batched_shuffled_items = [b.tolist() for b in batched_shuffled if isinstance(b, np.ndarray)]
+    assert len(batched_shuffled_items) == 3
+    assert sorted(batched_shuffled_items) == [[0, 1], [2, 3], [4, 5]]
 
     # Experimental datasets (both zero_grain.experimental and zero_grain.python.experimental)
     assert experimental.FlatMapIterDataset is python.experimental.FlatMapIterDataset
@@ -1221,8 +1312,28 @@ def test_v005_methods_and_experimental_datasets() -> None:
             """
             return [element, element]
 
+    from zero_grain.experimental import _LazyStreamDataSource
+
+    lazy_src = _LazyStreamDataSource(stream_factory=lambda: iter([10, 20, 30]), repr_label="lazy")
+    assert lazy_src[0] == 10
+    assert lazy_src[0] == 10
+    assert lazy_src[1] == 20
+    assert len(lazy_src) == 3
+
     fm_ds = FlatMapIterDataset(m1, _DupFlatMap())
+    assert fm_ds.dataset.source[0] == 1
+    assert fm_ds.dataset.source[1] == 1
+    assert repr(fm_ds.dataset.source).startswith("FlatMapIterDataset(")
+    with pytest.raises(IndexError):
+        _ = fm_ds.dataset.source[10]
+    with pytest.raises(IndexError):
+        _ = fm_ds.dataset.source[-10]
     assert list(fm_ds) == [1, 1, 2, 2]
+    assert fm_ds.dataset[-1] == 2
+    assert list(fm_ds.map(lambda x: int(x) * 10 if isinstance(x, int) else x)) == [10, 10, 20, 20]
+    assert_equal_output_after_checkpoint(fm_ds)
+    fm_empty = FlatMapIterDataset(MapDataset([]), _DupFlatMap())
+    assert list(fm_empty) == []
     fm_callable = FlatMapIterDataset(m1.to_iter_dataset(), lambda x: [x])
     assert list(fm_callable) == [1, 2]
     with pytest.raises(ValueError, match="exceeds max_fan_out"):
@@ -1246,6 +1357,8 @@ def test_v005_methods_and_experimental_datasets() -> None:
     m3 = MapDataset.source([100, 200, 300])
     inter_ds = InterleaveIterDataset([m_empty, m1, m2, m3, m_empty], cycle_length=2)
     assert list(inter_ds) == [10, 1, 20, 2, 100, 200, 300]
+    assert list(inter_ds.filter(lambda x: isinstance(x, int) and x >= 10)) == [10, 20, 100, 200, 300]
+    assert_equal_output_after_checkpoint(inter_ds)
 
     with pytest.raises(ValueError, match="num_packing_bins must be >= 1"):
         FirstFitPackIterDataset(m1, length_struct=4, num_packing_bins=0)
@@ -1262,6 +1375,7 @@ def test_v005_methods_and_experimental_datasets() -> None:
         max_sequences_per_bin=2,
     )
     assert list(packed_unshuffled) == [[1, 2, 3], [4, 5, 6]]
+    assert_equal_output_after_checkpoint(packed_unshuffled)
 
     packed_shuffled = FirstFitPackIterDataset(
         MapDataset.source([1, 2, 3]),
@@ -1270,7 +1384,44 @@ def test_v005_methods_and_experimental_datasets() -> None:
         shuffle_bins=True,
         max_sequences_per_bin=1,
     )
-    assert len(list(packed_shuffled)) == 3
+    shuffled_bins = list(packed_shuffled)
+    assert sorted(b for b in shuffled_bins if isinstance(b, list)) == [[1, 0], [2, 0], [3, 0]]
+
+    # Verify FirstFitPackIterDataset with NamedTuple, plain tuple, and chex.dataclass PyTrees
+    import zero_chex as chex
+
+    @chex.dataclass
+    class _PackSample:
+        """Mappable dataclass for packing test."""
+
+        tokens: list[int] | int
+        mask: list[int] | int
+
+    packed_nt = FirstFitPackIterDataset(
+        MapDataset.source([_SamplePair([1, 2], [10]), _SamplePair([3], [20, 30])]),
+        length_struct=_SamplePair(3, 3),
+        num_packing_bins=1,
+        shuffle_bins=False,
+        padding_struct=_SamplePair(0, -1),
+    )
+    assert list(packed_nt) == [_SamplePair([1, 2, 3], [10, 20, 30])]
+
+    packed_tup = FirstFitPackIterDataset(
+        MapDataset.source([([1], [2]), ([3], [4])]),
+        length_struct=(3, 3),
+        num_packing_bins=1,
+        shuffle_bins=False,
+        padding_struct=(0, 9),
+    )
+    assert list(packed_tup) == [([1, 3, 0], [2, 4, 9])]
+
+    packed_dc = FirstFitPackIterDataset(
+        MapDataset.source([_PackSample(tokens=[1, 2], mask=[1, 1]), _PackSample(tokens=[3], mask=[1])]),
+        length_struct=_PackSample(tokens=4, mask=4),
+        num_packing_bins=1,
+        shuffle_bins=False,
+    )
+    assert list(packed_dc) == [_PackSample(tokens=[1, 2, 3, 0], mask=[1, 1, 1, 0])]
 
     arr_dict_source = MapDataset.source(
         [
@@ -1289,8 +1440,10 @@ def test_v005_methods_and_experimental_datasets() -> None:
     assert len(packed_dict_items) == 1
     first_bin = packed_dict_items[0]
     assert isinstance(first_bin, dict)
-    assert list(first_bin["a"]) == [1, 2, 3, 0]
-    assert list(first_bin["b"]) == [5, 6]
+    assert isinstance(first_bin["a"], np.ndarray) and first_bin["a"].dtype == np.dtype("int32")
+    assert first_bin["a"].tolist() == [1, 2, 3, 0]
+    assert isinstance(first_bin["b"], np.ndarray) and first_bin["b"].dtype == np.dtype("int32")
+    assert first_bin["b"].tolist() == [5, 6]
 
     empty_bin_pack = FirstFitPackIterDataset(
         MapDataset.source([[1, 2, 3, 4]]),
@@ -1300,8 +1453,198 @@ def test_v005_methods_and_experimental_datasets() -> None:
     )
     assert list(empty_bin_pack) == [[1, 2]]
 
+    # Verify PyGrainCheckpointHandler round-trips on FlatMapIterDataset, InterleaveIterDataset,
+    # FirstFitPackIterDataset, and chained BatchDataset pipelines
+    ckpt_handler = PyGrainCheckpointHandler()
+
+    fm_it1 = iter(fm_ds)
+    assert next(fm_it1) == 1
+    assert next(fm_it1) == 1
+    fm_ckpt_dir = tmp_path / "ckpt_flatmap"
+    ckpt_handler.save(fm_ckpt_dir, fm_it1)
+    fm_it2 = iter(fm_ds)
+    ckpt_handler.restore(fm_ckpt_dir, fm_it2)
+    assert list(fm_it2) == [2, 2]
+
+    inter_it1 = iter(inter_ds)
+    assert next(inter_it1) == 10
+    assert next(inter_it1) == 1
+    assert next(inter_it1) == 20
+    inter_ckpt_dir = tmp_path / "ckpt_interleave"
+    ckpt_handler.save(inter_ckpt_dir, inter_it1)
+    inter_it2 = iter(inter_ds)
+    ckpt_handler.restore(inter_ckpt_dir, inter_it2)
+    assert list(inter_it2) == [2, 100, 200, 300]
+
+    pack_it1 = iter(packed_unshuffled)
+    assert next(pack_it1) == [1, 2, 3]
+    pack_ckpt_dir = tmp_path / "ckpt_pack"
+    ckpt_handler.save(pack_ckpt_dir, pack_it1)
+    pack_it2 = iter(packed_unshuffled)
+    ckpt_handler.restore(pack_ckpt_dir, pack_it2)
+    assert list(pack_it2) == [[4, 5, 6]]
+
+    chained_batch_iter = batched_sliced.to_iter_dataset()
+    assert_equal_output_after_checkpoint(chained_batch_iter)
+    cb_it1 = iter(chained_batch_iter)
+    first_cb = next(cb_it1)
+    assert isinstance(first_cb, np.ndarray) and first_cb.tolist() == [2, 3]
+    cb_ckpt_dir = tmp_path / "ckpt_chained_batch"
+    ckpt_handler.save(cb_ckpt_dir, cb_it1)
+    cb_it2 = iter(chained_batch_iter)
+    ckpt_handler.restore(cb_ckpt_dir, cb_it2)
+    remaining_cb = list(cb_it2)
+    assert len(remaining_cb) == 1
+    assert isinstance(remaining_cb[0], np.ndarray) and remaining_cb[0].tolist() == [4, 5]
+
     from zero_grain.data_sources import ensure_testdata
 
     generated_dir = ensure_testdata()
     assert (generated_dir / "digits.array_record-00000-of-00002").is_file()
     assert (generated_dir / "digits.array_record-00001-of-00002").is_file()
+
+
+def test_dataset_options_filter_thresholds() -> None:
+    """Verify ``DatasetOptions`` warning and error threshold enforcement on ``FilterOperation``."""
+    from unittest import mock
+
+    records = [Record(RecordMetadata(index=i, record_key=i), i) for i in range(4)]
+
+    # Below warning threshold -> no warning emitted
+    opts_ok = DatasetOptions(filter_warn_threshold_ratio=0.6, filter_raise_threshold_ratio=0.9)
+    op_ok: FilterOperation[int] = FilterOperation(lambda x: x >= 2, dataset_options=opts_ok)
+    with mock.patch("logging.warning") as mock_warn_ok:
+        kept_ok = list(op_ok(records))
+        assert [r.data for r in kept_ok] == [2, 3]
+        mock_warn_ok.assert_not_called()
+
+    # Reaching warning threshold (3/4 = 0.75 >= 0.7) -> emits warning
+    opts_warn = DatasetOptions(filter_warn_threshold_ratio=0.7, filter_raise_threshold_ratio=0.9)
+    op_warn: FilterOperation[int] = FilterOperation(lambda x: x >= 3, dataset_options=opts_warn)
+    with mock.patch("logging.warning") as mock_warn_hit:
+        kept_warn = list(op_warn(records))
+        assert [r.data for r in kept_warn] == [3]
+        mock_warn_hit.assert_called_once()
+        warn_arg = str(mock_warn_hit.call_args[0][0])
+        assert "0.75 (3/4)" in warn_arg
+        assert "filter_warn_threshold_ratio=0.7" in warn_arg
+
+    # Reaching raise threshold (3/4 = 0.75 >= 0.75) -> raises ValueError
+    opts_raise = DatasetOptions(filter_warn_threshold_ratio=0.5, filter_raise_threshold_ratio=0.75)
+    op_raise: FilterOperation[int] = FilterOperation(lambda x: x >= 3, dataset_options=opts_raise)
+    with pytest.raises(ValueError, match="filter_raise_threshold_ratio=0.75"):
+        list(op_raise(records))
+
+    # Verify DatasetOptions filter threshold enforcement under graph evaluation (e.g. filter -> shuffle)
+    ds_graph_raise = (
+        MapDataset.range(4).filter(lambda x: isinstance(x, int) and x >= 3, dataset_options=opts_raise).shuffle(seed=11)
+    )
+    with pytest.raises(ValueError, match="filter_raise_threshold_ratio=0.75"):
+        list(ds_graph_raise)
+
+    ds_graph_op_opts: MapDataset[int] = (
+        MapDataset.range(4)
+        .map(FilterOperation(lambda x: isinstance(x, int) and x >= 3, dataset_options=opts_raise))
+        .shuffle(seed=11)
+    )
+    with pytest.raises(ValueError, match="filter_raise_threshold_ratio=0.75"):
+        list(ds_graph_op_opts)
+
+
+def test_multistage_graph_evaluation_and_sequential_slice_and_shm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify multi-stage ``MapDataset`` graph parity, ``sequential_slice`` worker partitioning, and shared memory array reconstruction.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+    """
+    import sys
+    from zero_grain._types import array_to_list
+    from zero_grain.dataset import _DatasetStepKind, _normalize_step_kind
+    from zero_grain.shared_memory_array import SharedMemoryArray, _dtype_itemsize
+
+    assert _normalize_step_kind(_DatasetStepKind.OPS) is _DatasetStepKind.OPS
+    assert _normalize_step_kind("shuffle") is _DatasetStepKind.SHUFFLE
+
+    # Verify exact parity between [ds[i] ...] and list(ds) across multi-stage pipelines
+    base = MapDataset.range(6)
+    p1_mapped: MapDataset[int] = base.map_with_index(lambda idx, x: idx * 100 + (int(x) if isinstance(x, int) else 0))
+    p1 = p1_mapped.shuffle(seed=7)
+    assert list(p1) == [p1[i] for i in range(len(p1))]
+
+    p2: MapDataset[int] = base.shuffle(seed=3).map_with_index(
+        lambda idx, x: idx * 10 + (int(x) if isinstance(x, int) else 0)
+    )
+    assert list(p2) == [p2[i] for i in range(len(p2))]
+
+    p3 = base.repeat(2).repeat(2)
+    assert list(p3) == [p3[i] for i in range(len(p3))]
+
+    p4_mapped: MapDataset[int] = base.map(lambda x: (int(x) if isinstance(x, int) else 0) + 1)
+    p4 = p4_mapped.repeat(2)
+    assert list(p4) == [p4[i] for i in range(len(p4))]
+
+    # Verify sequential_slice=True vs False across 2 workers
+    seq_ds = MapDataset.range(6)
+    interleaved_workers = seq_ds.mp_prefetch(
+        MultiprocessingOptions(num_workers=2),
+        sequential_slice=False,
+    )
+    contiguous_workers = seq_ds.mp_prefetch(
+        MultiprocessingOptions(num_workers=2),
+        sequential_slice=True,
+    )
+    assert list(interleaved_workers) == [0, 1, 2, 3, 4, 5]
+    # With 2 workers and sequential_slice=True: worker 0 gets [0, 1, 2], worker 1 gets [3, 4, 5],
+    # and round-robin across workers yields [0, 3, 1, 4, 2, 5].
+    assert list(contiguous_workers) == [0, 3, 1, 4, 2, 5]
+
+    # SharedMemoryDataSource negative and slice indexing + bounds error
+    shm_src = SharedMemoryDataSource([10, 20, 30, 40], name="slice_test")
+    assert shm_src[-1] == 40
+    assert shm_src[1:3] == [20, 30]
+    with pytest.raises(IndexError, match="out of range"):
+        _ = shm_src[10]
+    with pytest.raises(IndexError, match="out of range"):
+        _ = shm_src[-10]
+
+    # SharedMemoryArray & SharedMemoryArrayMetadata .to_numpy() and __array__() across dtypes
+    assert _dtype_itemsize("complex128") == 16
+    assert _dtype_itemsize("bfloat16") == 2
+
+    for dt_str, vals in (
+        ("int32", [[1, 2], [3, 4]]),
+        ("int64", [10, 20]),
+        ("float32", [1.5, 2.5]),
+        ("float64", 3.25),
+        ("bool", [True, False]),
+    ):
+        arr = np.array(vals, dtype=np.dtype(dt_str))
+        meta = SharedMemoryArray.from_array(arr)
+        reconstructed = meta.to_numpy()
+        assert isinstance(reconstructed, np.ndarray)
+        assert reconstructed.shape == arr.shape
+        assert reconstructed.tolist() == arr.tolist()
+        sma = SharedMemoryArray.from_metadata(meta)
+        assert array_to_list(sma.to_numpy()) == arr.tolist()
+        assert array_to_list(sma.__array__()) == arr.tolist()
+        assert array_to_list(meta.__array__()) == arr.tolist()
+        meta.close_and_unlink()
+        # After unlinking, to_numpy() returns a zero-filled array of matching shape
+        zero_reconstructed = meta.to_numpy()
+        assert zero_reconstructed.shape == arr.shape
+
+    empty_sma = SharedMemoryArray(shape=(), dtype="int32")
+    assert array_to_list(empty_sma.to_numpy()) == 0
+    empty_sma.unlink_on_del()
+
+    # Verify fallback to _ZERO_JAX_NUMPY_ADAPTER when numpy is absent
+    meta_fb = SharedMemoryArray.from_array(np.array([5, 6], dtype=np.int32))
+    meta_fb_str = SharedMemoryArrayMetadata(name=meta_fb.name, dtype="int32", shape=meta_fb.shape)
+    monkeypatch.setitem(sys.modules, "numpy", None)
+    monkeypatch.setitem(sys.modules, "zero_jax.numpy", None)
+    fb_arr = meta_fb_str.to_numpy()
+    assert fb_arr.shape == (2,)
+    assert fb_arr.ndim == 1
+    meta_fb.close_and_unlink()

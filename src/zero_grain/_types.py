@@ -5,17 +5,22 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import dataclasses
 import sys
-from types import ModuleType
 from typing import Protocol, TypedDict, TypeVar, Union, runtime_checkable
-from ml_switcheroo_compiler import ops as _compiler_ops
+from ml_switcheroo_compiler.core.device import Device as CompilerDevice
 from ml_switcheroo_compiler.core.dtype import DType as CompilerDType
-from ml_switcheroo_compiler.core.tensor import Tensor as CompilerTensor
+from ml_switcheroo_compiler.core.tensor import Tensor as CompilerTensor, TensorConfig as CompilerTensorConfig
 from typing_extensions import TypeAlias, TypeGuard
 from zero_jax._types import ArrayLikeSpec as JaxArrayLikeSpec
 from zero_jax.numpy import ndarray as JaxArray
 
 ScalarElement: TypeAlias = Union[int, float, bool, str, bytes, complex, None]
-_INITIAL_NUMPY_MODULE: ModuleType | None = sys.modules.get("numpy")
+NestedNumericList: TypeAlias = Union[int, float, bool, complex, list["NestedNumericList"]]
+_PYTHON_SCALAR_DTYPE_NAMES: dict[type[int | float | bool | complex], str] = {
+    bool: "bool",
+    int: "int64",
+    float: "float64",
+    complex: "complex128",
+}
 
 
 @runtime_checkable
@@ -82,6 +87,8 @@ def dtype_name(dtype: DTypeSpec) -> str:
     """
     if isinstance(dtype, DTypeProtocol):
         return dtype.name
+    if isinstance(dtype, type) and dtype in _PYTHON_SCALAR_DTYPE_NAMES:
+        return _PYTHON_SCALAR_DTYPE_NAMES[dtype]
     return str(dtype or "float64")
 
 
@@ -144,11 +151,23 @@ class FlaggedArrayProtocol(ArrayProtocol, Protocol):
 class ToListArrayProtocol(Protocol):
     """Protocol representing an array exposing a ``tolist()`` conversion method."""
 
-    def tolist(self) -> list[ScalarElement] | ScalarElement:
+    def tolist(self) -> list[ScalarElement] | list[NestedNumericList] | ScalarElement:
         """Convert the array into nested Python lists or a scalar.
 
         Returns:
-            list[ScalarElement] | ScalarElement: Python representation.
+            list[ScalarElement] | list[NestedNumericList] | ScalarElement: Nested list or scalar representation.
+        """
+
+
+@runtime_checkable
+class BytesExportArrayProtocol(ArrayProtocol, Protocol):
+    """Protocol representing an array exposing a ``tobytes()`` byte serialization method."""
+
+    def tobytes(self) -> bytes:
+        """Serialize the array buffer to contiguous raw bytes.
+
+        Returns:
+            bytes: Raw buffer bytes.
         """
 
 
@@ -316,21 +335,31 @@ class NumpyModuleProtocol(Protocol):
     ndarray: type[ArrayProtocol]
     random: NumpyRandomModuleProtocol
 
-    def array(self, obj: Sequence[ElementTree] | ElementTree) -> ArrayProtocol:
+    def array(
+        self,
+        obj: Sequence[ElementTree] | ElementTree,
+        dtype: DTypeSpec = None,
+    ) -> ArrayProtocol:
         """Create an array from ``obj``.
 
         Args:
             obj (Sequence[ElementTree] | ElementTree): Input sequence or value.
+            dtype (DTypeSpec): Optional explicit data type override.
 
         Returns:
             ArrayProtocol: Constructed array.
         """
 
-    def asarray(self, obj: Sequence[ElementTree] | ElementTree) -> ArrayProtocol:
+    def asarray(
+        self,
+        obj: Sequence[ElementTree] | ElementTree,
+        dtype: DTypeSpec = None,
+    ) -> ArrayProtocol:
         """Convert ``obj`` to an array.
 
         Args:
             obj (Sequence[ElementTree] | ElementTree): Input sequence or value.
+            dtype (DTypeSpec): Optional explicit data type override.
 
         Returns:
             ArrayProtocol: Constructed array.
@@ -364,53 +393,111 @@ class _ZeroJaxRandomAdapter:
         return DeterministicGenerator(seed=seed)
 
 
+def _infer_nested_list_and_shape(
+    obj: Sequence[ElementTree] | ElementTree,
+) -> tuple[NestedNumericList, tuple[int, ...], str]:
+    """Convert ``obj`` into nested numeric lists alongside its inferred ``(shape, dtype_name)``.
+
+    Args:
+        obj (Sequence[ElementTree] | ElementTree): Input sequence or scalar value.
+
+    Returns:
+        tuple[NestedNumericList, tuple[int, ...], str]: ``(nested_payload, shape, dtype_str)``.
+    """
+    if isinstance(obj, JaxArray):
+        raw_data = obj._tensor._data
+        if isinstance(raw_data, (int, float, bool)):
+            return raw_data, obj.shape, dtype_name(obj.dtype)
+        if isinstance(raw_data, Sequence) and not isinstance(raw_data, (str, bytes)):
+            seq_items: list[ElementTree] = [item for item in raw_data if isinstance(item, (int, float, bool, list))]
+            seq_res, _, _ = _infer_nested_list_and_shape(seq_items)
+            return seq_res, obj.shape, dtype_name(obj.dtype)
+        listed_jax = obj.tolist()
+        return (
+            [x for x in listed_jax if isinstance(x, (int, float, bool, complex, list))]
+            if isinstance(listed_jax, list)
+            else (listed_jax if isinstance(listed_jax, (int, float, bool, complex)) else 0),
+            obj.shape,
+            dtype_name(obj.dtype),
+        )
+    if isinstance(obj, Sequence) and not isinstance(obj, (str, bytes)):
+        if len(obj) == 0:
+            return [], (0,), "float64"
+        sub_results = [_infer_nested_list_and_shape(item) for item in obj]
+        sub_lists: list[NestedNumericList] = [r[0] for r in sub_results]
+        first_sub_shape = sub_results[0][1]
+        dtypes = {r[2] for r in sub_results}
+        merged_dt = "float64" if ("float64" in dtypes or "float32" in dtypes) else sub_results[0][2]
+        return sub_lists, (len(obj), *first_sub_shape), merged_dt
+    if isinstance(obj, bool):
+        return obj, (), "bool"
+    if isinstance(obj, int):
+        return obj, (), "int64"
+    if isinstance(obj, float):
+        return obj, (), "float64"
+    return 0, (), "int64"
+
+
+def _make_zero_nested_list(shape: tuple[int, ...], zero_scalar: int | float | bool) -> NestedNumericList:
+    """Build a nested list of zeros matching ``shape``.
+
+    Args:
+        shape (tuple[int, ...]): Target tensor shape.
+        zero_scalar (int | float | bool): Scalar zero value.
+
+    Returns:
+        NestedNumericList: Nested zero list or scalar if 0-D.
+    """
+    if len(shape) <= 1:
+        return [zero_scalar for _ in range(shape[0])] if shape else zero_scalar
+    sub = _make_zero_nested_list(shape[1:], zero_scalar)
+    return [sub for _ in range(shape[0])]
+
+
 class _ZeroJaxNumpyAdapter:
     """Adapter wrapping ``zero_jax.numpy`` to satisfy ``NumpyModuleProtocol`` with dtype preservation."""
 
     ndarray: type[ArrayProtocol] = JaxArray
     random: NumpyRandomModuleProtocol = _ZeroJaxRandomAdapter()
 
-    def array(self, obj: Sequence[ElementTree] | ElementTree) -> JaxArray:
-        """Create a ``zero_jax`` array from ``obj``.
+    def array(
+        self,
+        obj: Sequence[ElementTree] | ElementTree,
+        dtype: DTypeSpec = None,
+    ) -> JaxArray:
+        """Create a ``zero_jax`` array from ``obj`` without mutating ``sys.modules``.
 
         Args:
             obj (Sequence[ElementTree] | ElementTree): Input sequence or value.
+            dtype (DTypeSpec): Optional explicit data type override.
 
         Returns:
             JaxArray: Constructed ``zero_jax`` array.
         """
-        snapshot = dict(sys.modules)
-        if sys.modules.get("numpy") is None and _INITIAL_NUMPY_MODULE is not None:
-            sys.modules["numpy"] = _INITIAL_NUMPY_MODULE
-        try:
-            if isinstance(obj, Sequence) and len(obj) > 0 and isinstance(obj[0], JaxArray):
-                tensors = [item._tensor for item in obj if isinstance(item, JaxArray)]
-                stacked = _compiler_ops.stack(tensors)
-                assert isinstance(stacked, CompilerTensor)
-                return JaxArray(stacked)
-            raw_list = (
-                [int(x) if isinstance(x, int) else float(x) for x in obj if isinstance(x, (int, float, bool))]
-                if isinstance(obj, Sequence) and not isinstance(obj, (str, bytes))
-                else (obj if isinstance(obj, (int, float, bool)) else 0)
-            )
-            created = _compiler_ops.array(raw_list)
-            assert isinstance(created, CompilerTensor)
-            return JaxArray(created)
-        finally:
-            if sys.modules.get("numpy") is not snapshot.get("numpy"):
-                sys.modules.clear()
-                sys.modules.update(snapshot)
+        nested_data, shape, inferred_dt = _infer_nested_list_and_shape(obj)
+        resolved_dt_name = dtype_name(dtype) if dtype is not None else inferred_dt
+        target_dt = CompilerDType(resolved_dt_name)
+        np_mod = sys.modules.get("numpy")
+        if isinstance(np_mod, NumpyModuleProtocol):
+            raw_arr = np_mod.asarray(nested_data, dtype=resolved_dt_name)
+            return JaxArray(CompilerTensor(raw_arr, CompilerTensorConfig(shape, target_dt, CompilerDevice("cpu"))))
+        return JaxArray(CompilerTensor(nested_data, CompilerTensorConfig(shape, target_dt, CompilerDevice("cpu"))))
 
-    def asarray(self, obj: Sequence[ElementTree] | ElementTree) -> JaxArray:
+    def asarray(
+        self,
+        obj: Sequence[ElementTree] | ElementTree,
+        dtype: DTypeSpec = None,
+    ) -> JaxArray:
         """Convert ``obj`` into a ``zero_jax`` array.
 
         Args:
             obj (Sequence[ElementTree] | ElementTree): Input sequence or value.
+            dtype (DTypeSpec): Optional explicit data type override.
 
         Returns:
             JaxArray: Constructed ``zero_jax`` array.
         """
-        return self.array(obj)
+        return self.array(obj, dtype=dtype)
 
     def zeros_like(self, a: ArrayProtocol) -> JaxArray:
         """Return a zero-filled ``zero_jax`` array preserving ``a.shape`` and ``a.dtype``.
@@ -421,18 +508,16 @@ class _ZeroJaxNumpyAdapter:
         Returns:
             JaxArray: Zero-filled ``zero_jax`` array.
         """
-        snapshot = dict(sys.modules)
-        if sys.modules.get("numpy") is None and _INITIAL_NUMPY_MODULE is not None:
-            sys.modules["numpy"] = _INITIAL_NUMPY_MODULE
-        try:
-            target_dt = CompilerDType(dtype_name(a.dtype))
-            zeros_t = _compiler_ops.zeros(a.shape, dtype=target_dt)
-            assert isinstance(zeros_t, CompilerTensor)
-            return JaxArray(zeros_t)
-        finally:
-            if sys.modules.get("numpy") is not snapshot.get("numpy"):
-                sys.modules.clear()
-                sys.modules.update(snapshot)
+        dt_str = dtype_name(a.dtype)
+        target_dt = CompilerDType(dt_str)
+        np_mod = sys.modules.get("numpy")
+        if isinstance(np_mod, NumpyModuleProtocol):
+            return JaxArray(
+                CompilerTensor(np_mod.zeros_like(a), CompilerTensorConfig(a.shape, target_dt, CompilerDevice("cpu")))
+            )
+        zero_scalar: int | float | bool = False if dt_str == "bool" else (0 if "int" in dt_str else 0.0)
+        zeros_payload = _make_zero_nested_list(a.shape, zero_scalar)
+        return JaxArray(CompilerTensor(zeros_payload, CompilerTensorConfig(a.shape, target_dt, CompilerDevice("cpu"))))
 
 
 _ZERO_JAX_NUMPY_ADAPTER: NumpyModuleProtocol = _ZeroJaxNumpyAdapter()
@@ -498,19 +583,24 @@ def get_numpy_module() -> NumpyModuleProtocol | None:
     return _ZERO_JAX_NUMPY_ADAPTER
 
 
-def array_to_list(arr: ArrayProtocol) -> list[ScalarElement] | ScalarElement:
+def array_to_list(arr: ArrayProtocol) -> list[ScalarElement] | list[NestedNumericList] | ScalarElement:
     """Convert any ``ArrayProtocol`` instance into nested Python lists or a scalar.
 
     Args:
         arr (ArrayProtocol): Array instance to convert.
 
     Returns:
-        list[ScalarElement] | ScalarElement: Nested list or scalar representation.
+        list[ScalarElement] | list[NestedNumericList] | ScalarElement: Nested list or scalar representation.
+
+    Raises:
+        TypeError: If ``arr`` does not implement ``tolist()`` or ``to_list()``.
     """
     if isinstance(arr, ToListArrayProtocol):
         return arr.tolist()
-    assert isinstance(arr, ZeroArrayProtocol)
-    return [x for x in arr.to_list()]
+    if isinstance(arr, ZeroArrayProtocol):
+        zero_list: list[ScalarElement] = [x for x in arr.to_list()]
+        return zero_list
+    raise TypeError(f"Unsupported ArrayProtocol type for list conversion: {type(arr)}")
 
 
 def is_dataclass_instance(value: ElementTree) -> TypeGuard[DataclassProtocol]:
@@ -566,9 +656,12 @@ __all__ = [
     "ArrayConvertibleProtocol",
     "ArrayFlagsProtocol",
     "ArrayProtocol",
+    "BytesExportArrayProtocol",
     "CheckpointStateDict",
+    "CompilerDevice",
     "CompilerDType",
     "CompilerTensor",
+    "CompilerTensorConfig",
     "DTypeProtocol",
     "DTypeSpec",
     "DataclassProtocol",
@@ -578,6 +671,7 @@ __all__ = [
     "JaxArrayLikeSpec",
     "MappableDataclassProtocol",
     "NamedTupleProtocol",
+    "NestedNumericList",
     "NumpyModuleProtocol",
     "NumpyRandomModuleProtocol",
     "ObjectDTypeProtocol",
@@ -591,6 +685,9 @@ __all__ = [
     "T_out",
     "ToListArrayProtocol",
     "ZeroArrayProtocol",
+    "_ZERO_JAX_NUMPY_ADAPTER",
+    "_infer_nested_list_and_shape",
+    "_make_zero_nested_list",
     "array_to_list",
     "dtype_name",
     "get_numpy_module",

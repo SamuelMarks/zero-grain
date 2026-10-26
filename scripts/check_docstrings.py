@@ -73,6 +73,25 @@ def _is_non_none_return(annotation: ast.expr | None) -> bool:
     return not (isinstance(annotation, ast.Name) and annotation.id in ("None", "NoReturn"))
 
 
+def _has_yield_in_body(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Check whether ``node`` directly yields values (excluding nested functions).
+
+    Args:
+        node (ast.FunctionDef | ast.AsyncFunctionDef): Function AST node.
+
+    Returns:
+        bool: True if ``node`` contains an ``ast.Yield`` or ``ast.YieldFrom``.
+    """
+    stack: list[ast.AST] = list(node.body)
+    while stack:
+        curr = stack.pop()
+        if isinstance(curr, (ast.Yield, ast.YieldFrom)):
+            return True
+        if not isinstance(curr, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            stack.extend(ast.iter_child_nodes(curr))
+    return False
+
+
 def check_file_docstrings(filepath: Path) -> list[str]:
     """Verify module, class, function, argument, and return docstrings in ``filepath``.
 
@@ -142,8 +161,16 @@ def check_file_docstrings(filepath: Path) -> list[str]:
                             violations.append(
                                 f"{filepath}:{node.lineno}: Function '{node.name}' is missing docstring entry for parameter '{param}'"
                             )
+                    for extra_param in sorted(documented_params - set(all_args)):
+                        violations.append(
+                            f"{filepath}:{node.lineno}: Function '{node.name}' documents unknown parameter '{extra_param}'"
+                        )
 
-            if node.name != "__init__" and _is_non_none_return(node.returns) and not _RETURNS_SECTION_RE.search(fn_doc):
+            if (
+                node.name != "__init__"
+                and (_is_non_none_return(node.returns) or _has_yield_in_body(node))
+                and not _RETURNS_SECTION_RE.search(fn_doc)
+            ):
                 violations.append(
                     f"{filepath}:{node.lineno}: Function '{node.name}' has non-None return annotation "
                     "but is missing 'Returns:' or 'Yields:' section"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 import sys
 import numpy as np
@@ -46,6 +47,7 @@ from zero_grain import (
     assert_equal_output_after_checkpoint,
     batch_and_pad,
     create_rng,
+    get_element_spec,
     load,
     map_tree,
     spec_like,
@@ -120,7 +122,35 @@ def test_pure_python_fallbacks_without_numpy(monkeypatch: pytest.MonkeyPatch) ->
     Args:
         monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
-    from zero_grain._types import JaxArray
+    from zero_grain._types import JaxArray, array_to_list, dtype_name
+
+    assert dtype_name(int) == "int64"
+    assert dtype_name(float) == "float64"
+    assert dtype_name(bool) == "bool"
+    assert dtype_name(complex) == "complex128"
+
+    class _FakeArrayNoToList:
+        """ArrayProtocol stub without tolist() or to_list()."""
+
+        shape = (1,)
+        ndim = 1
+        dtype = "int32"
+
+    with pytest.raises(TypeError, match="Unsupported ArrayProtocol"):
+        array_to_list(_FakeArrayNoToList())
+
+    jnp_with_np = get_numpy_module()
+    assert jnp_with_np is not None
+    from zero_grain._types import _ZERO_JAX_NUMPY_ADAPTER
+
+    arr_with_np = _ZERO_JAX_NUMPY_ADAPTER.array([1, 2])
+    assert isinstance(arr_with_np, JaxArray)
+    zeros_with_np = _ZERO_JAX_NUMPY_ADAPTER.zeros_like(arr_with_np)
+    assert isinstance(zeros_with_np, JaxArray)
+    stacked_jax_with_np = _ZERO_JAX_NUMPY_ADAPTER.array([arr_with_np, arr_with_np])
+    assert stacked_jax_with_np.shape == (2, 2)
+    scalar_jax_with_np = _ZERO_JAX_NUMPY_ADAPTER.array(5)
+    assert _ZERO_JAX_NUMPY_ADAPTER.array([scalar_jax_with_np]).shape == (1,)
 
     monkeypatch.setitem(sys.modules, "numpy", None)
     jnp_adapter = get_numpy_module()
@@ -130,6 +160,15 @@ def test_pure_python_fallbacks_without_numpy(monkeypatch: pytest.MonkeyPatch) ->
     jnp_padded = batch_and_pad([jnp_batched], 2)
     assert isinstance(jnp_padded, JaxArray) and jnp_padded.shape == (2, 3)
     assert isinstance(jnp_adapter.asarray([1, 2]), JaxArray)
+    assert jnp_adapter.array([]).shape == (0,)
+    assert jnp_adapter.array([1.5, 2.5]).shape == (2,)
+    assert jnp_adapter.array([True, False]).shape == (2,)
+    assert jnp_adapter.array(["unsupported"]).shape == (1,)
+    scalar_no_np = jnp_adapter.array(7)
+    assert jnp_adapter.array([scalar_no_np]).shape == (1,)
+    assert jnp_adapter.zeros_like(scalar_no_np).shape == ()
+    jnp_2d = jnp_adapter.array([[1.0, 2.0], [3.0, 4.0]])
+    assert jnp_adapter.zeros_like(jnp_2d).shape == (2, 2)
     jnp_rng = create_rng(7)
     assert 0.0 <= jnp_rng.random() < 1.0
 
@@ -141,6 +180,9 @@ def test_pure_python_fallbacks_without_numpy(monkeypatch: pytest.MonkeyPatch) ->
 
     assert _batch_elements([1, 2, 3]) == [1, 2, 3]
     assert _batch_elements([[1, 2], [3, 4]]) == [[1, 3], [2, 4]]
+    assert batch_and_pad([], 2) == []
+    assert batch_and_pad([1], 0) == []
+    assert batch_and_pad([1, 2, 3], 2) == [1, 2]
     assert batch_and_pad([1], 2) == [1, 0]
     assert batch_and_pad([1.5], 2) == [1.5, 0.0]
     assert batch_and_pad([True], 2) == [True, False]
@@ -209,12 +251,45 @@ def test_tree_and_operations_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None
     Args:
         monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
+    from dataclasses import dataclass
+    from typing import NamedTuple
+    from unittest import mock
+
     assert map_tree(lambda x: int(x) + 10 if isinstance(x, int) else x, (1, 2)) == (11, 12)
     assert spec_like(np.zeros((2, 3), dtype=np.int32)) == "int32[2, 3]"
 
+    class _NT1(NamedTuple):
+        """First NamedTuple for structure mismatch testing."""
+
+        a: int
+
+    class _NT2(NamedTuple):
+        """Second NamedTuple for structure mismatch testing."""
+
+        b: int
+
+    @dataclass
+    class _StdDC1:
+        """First standard dataclass for structure mismatch testing."""
+
+        x: int
+
+    @dataclass
+    class _StdDC2:
+        """Second standard dataclass for structure mismatch testing."""
+
+        y: int
+
+    with pytest.raises(TypeError, match="Record structures do not match"):
+        _batch_elements([_NT1(1), _NT2(2)])
+    with pytest.raises(TypeError, match="Record structures do not match"):
+        _batch_elements([_StdDC1(1), _StdDC2(2)])
+
     monkeypatch.delitem(sys.modules, "absl.logging", raising=False)
-    ro = ReadOptions(num_threads=8, prefetch_buffer_size=2)
-    assert ro.num_threads == 8
+    with mock.patch("logging.warning") as mock_warn:
+        ro = ReadOptions(num_threads=8, prefetch_buffer_size=2)
+        assert ro.num_threads == 8
+        mock_warn.assert_called_once()
 
     ss = SequentialSampler(num_records=3, shard_options=None)
     assert len(ss) == 3
@@ -238,6 +313,19 @@ def test_tree_and_operations_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None
 
     op_filt: FilterOperation[ElementTree] = FilterOperation(_PositiveFilter())
     assert [r.data for r in op_filt([rec, None])] == [5]
+    assert op_filt.apply_element(5) == 5
+    assert op_filt.apply_element(-1) is None
+
+    shm_elem_op = CopyNumPyArrayToSharedMemoryOperation()
+    shm_applied = shm_elem_op.apply_element(np.array([10, 20], dtype=np.int32))
+    from zero_grain.shared_memory_array import SharedMemoryArray, SharedMemoryArrayMetadata
+
+    assert isinstance(shm_applied, SharedMemoryArrayMetadata)
+    assert len(shm_applied.get_bytes()) == 8
+    reconstructed_sma = SharedMemoryArray.from_metadata(shm_applied)
+    assert reconstructed_sma.metadata == shm_applied
+    shm_applied.close_and_unlink()
+    assert shm_applied.get_bytes() == b""
 
     base_op: Operation[int, int] = Operation()
     with pytest.raises(NotImplementedError):
@@ -293,12 +381,73 @@ def test_dataset_and_dataloader_branches() -> None:
     )
     with pytest.raises(IndexError, match="Empty shard"):
         _ = empty_shard_sampler[0]
+    empty_shard_dl: DataLoader[int] = DataLoader(
+        data_source=InMemoryDataSource([1]),
+        sampler=empty_shard_sampler,
+    )
+    assert list(empty_shard_dl) == []
+
+    from zero_grain.samplers import Sampler
+
+    class _CustomMetaSampler(Sampler):
+        """Custom ``Sampler`` subclass yielding a single ``RecordMetadata``."""
+
+        def __iter__(self) -> Iterator[RecordMetadata]:
+            """Yield one ``RecordMetadata``.
+
+            Yields:
+                RecordMetadata: Single metadata record.
+            """
+            yield RecordMetadata(index=0, record_key=0)
+
+    dl_meta_seq: DataLoader[int] = DataLoader(
+        data_source=InMemoryDataSource([42]),
+        sampler=_CustomMetaSampler(),
+    )
+    assert list(dl_meta_seq) == [42]
+
+    from zero_grain._types import JaxArray
+    import zero_jax
+
+    raw_key = zero_jax.random.PRNGKey(11)
+    assert isinstance(raw_key, JaxArray)
+    key_sampler = IndexSampler(num_records=3, shuffle=True, seed=raw_key)
+    assert len(key_sampler) == 3
+
+    from zero_grain.data_sources import RangeDataSource
+    from zero_grain.dataset import FilterDataset
+
+    fd_src = FilterDataset.source(RangeDataSource(0, 2, 1))
+    assert isinstance(fd_src, FilterDataset)
+    assert list(Dataset(fd_src)) == [0, 1]
+    assert isinstance(BatchDataset.source([1, 2]), BatchDataset)
+    single_parent_sel: Dataset[int] = Dataset([Dataset.range(2)], selection_map=None)
+    assert list(single_parent_sel) == [0, 1]
 
     ds = Dataset.range(4)
     filtered_batched: BatchDataset[list[int]] = ds.filter(lambda x: isinstance(x, int) and x % 2 == 0).batch(2)
     assert len(filtered_batched) == 1
     b0 = filtered_batched[0]
     assert isinstance(b0, np.ndarray) and b0.tolist() == [0, 2]
+    assert (filtered_batched[0] == b0).all()
+
+    all_filtered_ds = ds.filter(lambda x: False)
+    assert get_element_spec(all_filtered_ds) is None
+    first_filtered_ds = ds.filter(lambda x: isinstance(x, int) and x > 0)
+    assert get_element_spec(first_filtered_ds) == "int"
+
+    repeat_then_slice = ds.repeat(2).slice(slice(1, 6))
+    assert list(repeat_then_slice.to_iter_dataset()) == [1, 2, 3, 0, 1]
+
+    from zero_grain.experimental import FirstFitPackIterDataset
+
+    single_bin_shuffled = FirstFitPackIterDataset(
+        Dataset.source([1]),
+        length_struct=2,
+        num_packing_bins=1,
+        shuffle_bins=True,
+    )
+    assert list(single_bin_shuffled) == [[1, 0]]
 
     sliced_iter = ds.slice(slice(1, 3)).to_iter_dataset(read_options=ReadOptions(num_threads=2))
     assert len(sliced_iter.dl.data_source) == 2
@@ -616,12 +765,12 @@ def test_scripts_execution(tmp_path: Path) -> None:
                 "    def documented_m(self, val: int) -> int:",
                 "        '''Method doc.'''",
                 "        return val",
-                "    def nodoc_m(self, val: int) -> int:",
+                "    def nodoc_m(self, val) -> int:",
                 "        return val",
                 "AliasCls = MyCls",
                 "UnknownAlias = ExternalThing",
                 "NotAlias, OtherTarget = 1, 2",
-                "def top_fn(a: int) -> int:",
+                "def top_fn(a: int, unannotated_p=1) -> int:",
                 "    return a",
             ]
         ),
@@ -747,11 +896,20 @@ def test_scripts_execution(tmp_path: Path) -> None:
                 "",
                 "    Args:",
                 "        a (int): First.",
+                "        stale_arg (int): Extra.",
                 "",
                 "    Raises:",
                 "        ValueError: Never.",
                 '    """',
-                "    return a + b",
+                "    def _inner() -> int:",
+                "        return a",
+                "    return _inner() + b",
+                "",
+                "def gen_fn():",
+                '    """Generator missing yields section."""',
+                "    def _nested() -> None:",
+                "        pass",
+                "    yield 1",
                 "",
                 "def none_return_fn() -> None:",
                 '    """Return nothing."""',
@@ -840,8 +998,8 @@ def test_scripts_execution(tmp_path: Path) -> None:
                 "",
                 "class SubCls(BaseSym, mod.AttrBase, GenBase[int], mod.GenAttr[int], make_base()):",
                 "    def test_method(self) -> None:",
-                "        obj.call_method(ArgSym, mod.ArgAttr, kw=KwSym)",
-                "        self.assertEqual(1, 1)",
+                "        res = obj.call_method(ArgSym, mod.ArgAttr, kw=KwSym)",
+                "        self.assertEqual(res, 42)",
             ]
         ),
         encoding="utf-8",
@@ -850,6 +1008,33 @@ def test_scripts_execution(tmp_path: Path) -> None:
     assert "UntestedClassName" not in tested_set
     assert {"BaseSym", "AttrBase", "GenBase", "GenAttr", "ArgSym", "ArgAttr", "KwSym"} <= tested_set
     assert check_test_completeness.main([str(fake_init), str(fake_tests_dir)]) == 1
+
+    # Verify tautological assertion detection in check_test_completeness
+    taut_tests_dir = tmp_path / "taut_tests"
+    taut_tests_dir.mkdir()
+    taut_file = taut_tests_dir / "test_taut.py"
+    taut_file.write_text(
+        chr(10).join(
+            [
+                "class TautSuite:",
+                "    def test_eq_self(self) -> None:",
+                "        OnlyInTautEq()",
+                "        self.assertEqual(1, 1)",
+                "    def test_true_const(self) -> None:",
+                "        OnlyInTautTrue()",
+                "        self.assertTrue(True)",
+                "    def test_assert_self(self) -> None:",
+                "        x = OnlyInAssertSelf()",
+                "        assert x == x",
+                "        assert True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    taut_errs = check_test_completeness.find_tautological_assertions(taut_tests_dir)
+    assert len(taut_errs) == 4
+    assert check_test_completeness.get_tested_names(taut_tests_dir) == set()
+    assert check_test_completeness.main([str(fake_init), str(taut_tests_dir)]) == 1
 
     assert update_badges.get_color(99.0) == "brightgreen"
     assert update_badges.get_color(85.0) == "green"

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+import enum
+import math
 from typing import Generic, overload
 from zero_grain._rng import index_shuffle
 from zero_grain._tree import spec_like
@@ -33,7 +35,7 @@ from zero_grain.operations import (
     Operation,
     RandomMapOperation,
 )
-from zero_grain.options import MultiprocessingOptions, ReadOptions
+from zero_grain.options import DatasetOptions, MultiprocessingOptions, ReadOptions
 from zero_grain.samplers import IndexSampler, Sampler
 from zero_grain.transforms import (
     FilterTransform,
@@ -43,12 +45,38 @@ from zero_grain.transforms import (
 )
 
 
+class _DatasetStepKind(enum.Enum):
+    """Enumeration of stage evaluation kinds in a ``MapDataset`` graph."""
+
+    SOURCE = "source"
+    OPS = "ops"
+    SLICE = "slice"
+    REPEAT = "repeat"
+    SHUFFLE = "shuffle"
+    MIX = "mix"
+    BATCH = "batch"
+
+
+def _normalize_step_kind(kind: _DatasetStepKind | str) -> _DatasetStepKind:
+    """Normalize a ``_DatasetStepKind`` or string step identifier into ``_DatasetStepKind``.
+
+    Args:
+        kind (_DatasetStepKind | str): Step kind enum or string value.
+
+    Returns:
+        _DatasetStepKind: Normalized ``_DatasetStepKind`` member.
+    """
+    if isinstance(kind, _DatasetStepKind):
+        return kind
+    return _DatasetStepKind(kind)
+
+
 def _apply_single_index_operations(
     raw_value: ElementTree,
     index: int,
     seed: int | None,
     operations: Sequence[Operation[ElementTree, ElementTree]],
-) -> ElementTree:
+) -> tuple[bool, ElementTree]:
     """Apply element-wise ``operations`` to ``raw_value`` at ``index``.
 
     Args:
@@ -58,14 +86,16 @@ def _apply_single_index_operations(
         operations (Sequence[Operation[ElementTree, ElementTree]]): Operations to evaluate.
 
     Returns:
-        ElementTree: Transformed element (or None if filtered out by a ``FilterOperation``).
+        tuple[bool, ElementTree]: ``(kept, transformed_element)`` where ``kept`` is False if filtered out.
     """
     current: ElementTree = raw_value
     for op_idx, op in enumerate(operations):
-        current = op.apply_element(current, index=index, seed=seed, op_seed=op_idx)
-        if current is None and isinstance(op, FilterOperation):
-            return None
-    return current
+        if isinstance(op, FilterOperation):
+            if not op.filter(current):
+                return False, None
+        else:
+            current = op.apply_element(current, index=index, seed=seed, op_seed=op_idx)
+    return True, current
 
 
 class DatasetSelectionMap:
@@ -81,9 +111,10 @@ class DatasetSelectionMap:
         Args:
             *args (ElementTree): Optional positional length or parent lengths.
             **kwargs (ElementTree): Optional keyword arguments (supports ``parent_lengths``).
+
+        Raises:
+            ValueError: If any parent length in ``parent_lengths`` is negative.
         """
-        self._args = args
-        self._kwargs = kwargs
         self.args = args
         self.kwargs = kwargs
         kw_lengths = kwargs.get("parent_lengths")
@@ -95,6 +126,8 @@ class DatasetSelectionMap:
             self._parent_lengths = tuple(int(x) for x in args if isinstance(x, int))
         else:
             self._parent_lengths = ()
+        if any(ln < 0 for ln in self._parent_lengths):
+            raise ValueError("parent_lengths must be non-negative")
         self._mapping: list[tuple[int, int]] = self._build_interleaved_mapping(self._parent_lengths)
 
     @staticmethod
@@ -175,6 +208,10 @@ class SelectionWithReplacementMap(DatasetSelectionMap):
             for w in raw_weights:
                 if isinstance(w, (int, float)):
                     weights_list.append(float(w))
+            if self._parent_lengths and len(weights_list) != len(self._parent_lengths):
+                raise ValueError(
+                    f"weights length {len(weights_list)} must match parent_lengths length {len(self._parent_lengths)}"
+                )
         if not weights_list and self._parent_lengths:
             weights_list = [1.0 for _ in self._parent_lengths]
         if weights_list:
@@ -224,7 +261,7 @@ class SelectionWithReplacementMap(DatasetSelectionMap):
         schedule: list[tuple[int, int]] = []
         for _ in range(total_size):
             best_parent = 0
-            best_score = -1e18
+            best_score = -math.inf
             for p_idx in range(num_parents):
                 if lengths[p_idx] <= 0:
                     continue
@@ -264,6 +301,10 @@ class _BoundMapDatasetSourceMethod:
         Returns:
             MapDataset[T_co]: Source-backed ``MapDataset``.
         """
+        if self._owner is FilterDataset:
+            return FilterDataset(source)
+        if self._owner is BatchDataset:
+            return BatchDataset(source)
         return MapDataset(source)
 
 
@@ -355,7 +396,7 @@ class MapDataset(Generic[T_co]):
         _shuffled_override: bool | None = None,
         _slice_range_override: range | None = None,
         _num_epochs_override: int | None = None,
-        _step_kind: str = "source",
+        _step_kind: _DatasetStepKind | str = _DatasetStepKind.SOURCE,
         _step_slice: range | None = None,
         _step_epochs: int = 1,
         _step_shuffle_seed: int | None = None,
@@ -377,10 +418,10 @@ class MapDataset(Generic[T_co]):
             _shuffled_override (bool | None): Internal shuffle flag override for derived datasets.
             _slice_range_override (range | None): Internal slice range override for derived datasets.
             _num_epochs_override (int | None): Internal epoch count override for derived datasets.
-            _step_kind (str): Stage evaluation kind (``source``, ``ops``, ``slice``, ``repeat``, ``shuffle``, ``mix``).
-            _step_slice (range | None): Stage-local slice range when ``_step_kind == 'slice'``.
-            _step_epochs (int): Stage-local repeat factor when ``_step_kind == 'repeat'``.
-            _step_shuffle_seed (int | None): Stage-local shuffle seed when ``_step_kind == 'shuffle'``.
+            _step_kind (_DatasetStepKind | str): Stage evaluation kind.
+            _step_slice (range | None): Stage-local slice range when ``_step_kind`` is ``SLICE``.
+            _step_epochs (int): Stage-local repeat factor when ``_step_kind`` is ``REPEAT``.
+            _step_shuffle_seed (int | None): Stage-local shuffle seed when ``_step_kind`` is ``SHUFFLE``.
             _reassemble_every_epoch (bool): Whether ``repeat`` increments epoch offset across epochs.
         """
         self._seed: int | None = None
@@ -389,7 +430,7 @@ class MapDataset(Generic[T_co]):
         self._num_epochs: int | None = 1
         self.operations: tuple[Operation[ElementTree, ElementTree], ...] = ()
         self._local_ops: tuple[Operation[ElementTree, ElementTree], ...] = ()
-        self._step_kind: str = _step_kind
+        self._step_kind: _DatasetStepKind = _normalize_step_kind(_step_kind)
         self._step_slice: range | None = _step_slice
         self._step_epochs: int = _step_epochs
         self._step_shuffle_seed: int | None = _step_shuffle_seed
@@ -404,8 +445,8 @@ class MapDataset(Generic[T_co]):
             self._shuffled = parents._shuffled
             self._slice_range = parents._slice_range
             self._num_epochs = parents._num_epochs
-            if _step_kind == "source":
-                self._step_kind = "ops"
+            if self._step_kind is _DatasetStepKind.SOURCE:
+                self._step_kind = _DatasetStepKind.OPS
         elif isinstance(parents, RandomAccessDataSource):
             self.parents = ()
             self._backing_source = parents
@@ -414,20 +455,20 @@ class MapDataset(Generic[T_co]):
             self.parents = parent_tuple
             first_parent = parent_tuple[0]
             self._backing_source = first_parent._backing_source
-            self.operations = first_parent.operations
-            self._seed = first_parent._seed
-            self._shuffled = first_parent._shuffled
-            self._slice_range = first_parent._slice_range
-            self._num_epochs = first_parent._num_epochs
             if len(parent_tuple) > 1 or selection_map is not None:
-                self._step_kind = "mix"
+                self._step_kind = _DatasetStepKind.MIX
                 self._selection_map = (
                     selection_map
                     if selection_map is not None
                     else DatasetSelectionMap(parent_lengths=[len(p) for p in parent_tuple])
                 )
             else:
-                self._step_kind = "ops"
+                self.operations = first_parent.operations
+                self._seed = first_parent._seed
+                self._shuffled = first_parent._shuffled
+                self._slice_range = first_parent._slice_range
+                self._num_epochs = first_parent._num_epochs
+                self._step_kind = _DatasetStepKind.OPS
         else:
             self.parents = ()
             seq_items: list[T_co] = [
@@ -459,7 +500,7 @@ class MapDataset(Generic[T_co]):
         shuffled: bool | None = None,
         slice_range: range | None = None,
         num_epochs: int | None = None,
-        step_kind: str = "ops",
+        step_kind: _DatasetStepKind | str = _DatasetStepKind.OPS,
         step_slice: range | None = None,
         step_epochs: int = 1,
         step_shuffle_seed: int | None = None,
@@ -474,7 +515,7 @@ class MapDataset(Generic[T_co]):
             shuffled (bool | None): Updated shuffle flag.
             slice_range (range | None): Updated index slice range.
             num_epochs (int | None): Updated epoch repetition count.
-            step_kind (str): Stage evaluation kind for the new child node.
+            step_kind (_DatasetStepKind | str): Stage evaluation kind for the new child node.
             step_slice (range | None): Stage-local slice range.
             step_epochs (int): Stage-local repeat factor.
             step_shuffle_seed (int | None): Stage-local shuffle seed.
@@ -492,7 +533,7 @@ class MapDataset(Generic[T_co]):
             _shuffled_override=shuffled if shuffled is not None else self._shuffled,
             _slice_range_override=slice_range if slice_range is not None else self._slice_range,
             _num_epochs_override=num_epochs if num_epochs is not None else self._num_epochs,
-            _step_kind=step_kind,
+            _step_kind=_normalize_step_kind(step_kind),
             _step_slice=step_slice,
             _step_epochs=step_epochs,
             _step_shuffle_seed=step_shuffle_seed,
@@ -605,15 +646,15 @@ class MapDataset(Generic[T_co]):
         Returns:
             int: Dataset length.
         """
-        if self._step_kind == "source" or not self.parents:
+        if self._step_kind is _DatasetStepKind.SOURCE or not self.parents:
             epochs = self._num_epochs if self._num_epochs is not None else 1
             return self._base_len() * epochs
-        if self._step_kind == "mix" and self._selection_map is not None:
+        if self._step_kind is _DatasetStepKind.MIX and self._selection_map is not None:
             return len(self._selection_map)
         parent_len = len(self.parents[0])
-        if self._step_kind == "slice" and self._step_slice is not None:
+        if self._step_kind is _DatasetStepKind.SLICE and self._step_slice is not None:
             return len(self._step_slice)
-        if self._step_kind == "repeat":
+        if self._step_kind is _DatasetStepKind.REPEAT:
             return parent_len * self._step_epochs
         return parent_len
 
@@ -627,22 +668,22 @@ class MapDataset(Generic[T_co]):
         Returns:
             ElementTree: Evaluated element (or ``None`` if filtered out).
         """
-        if self._step_kind == "source" or not self.parents:
+        if self._step_kind is _DatasetStepKind.SOURCE or not self.parents:
             return self._backing_source[index]
-        if self._step_kind == "mix" and self._selection_map is not None:
+        if self._step_kind is _DatasetStepKind.MIX and self._selection_map is not None:
             parent_idx, elem_idx = self._selection_map[index]
             return self.parents[parent_idx]._get_item_with_epoch(elem_idx, epoch_offset)
 
         parent = self.parents[0]
-        if self._step_kind == "slice" and self._step_slice is not None:
+        if self._step_kind is _DatasetStepKind.SLICE and self._step_slice is not None:
             mapped_idx = self._step_slice[index]
             return parent._get_item_with_epoch(mapped_idx, epoch_offset)
-        if self._step_kind == "repeat":
+        if self._step_kind is _DatasetStepKind.REPEAT:
             p_len = len(parent)
             rep_epoch, pos_in_parent = divmod(index, p_len)
             next_epoch_offset = (epoch_offset + rep_epoch) if self._reassemble_every_epoch else epoch_offset
             return parent._get_item_with_epoch(pos_in_parent, next_epoch_offset)
-        if self._step_kind == "shuffle":
+        if self._step_kind is _DatasetStepKind.SHUFFLE:
             p_len = len(parent)
             if p_len > 1:
                 base_seed = (
@@ -657,14 +698,15 @@ class MapDataset(Generic[T_co]):
             return parent._get_item_with_epoch(shuffled_idx, epoch_offset)
 
         raw_val = parent._get_item_with_epoch(index, epoch_offset)
-        if raw_val is None:
+        if raw_val is None and any(isinstance(op, FilterOperation) for op in parent.operations):
             return None
-        return _apply_single_index_operations(
+        kept, transformed = _apply_single_index_operations(
             raw_val,
             index=index,
             seed=self._seed,
             operations=self._local_ops,
         )
+        return transformed if kept else None
 
     @overload
     def __getitem__(self, index: int) -> ElementTree:
@@ -829,24 +871,31 @@ class MapDataset(Generic[T_co]):
     def filter(
         self,
         transform: (Callable[[ElementTree], bool] | FilterTransform[ElementTree] | FilterOperation[ElementTree]),
+        *,
+        dataset_options: DatasetOptions | None = None,
     ) -> FilterDataset[T_co]:
         """Filter elements matching ``transform``.
 
         Args:
             transform (Callable[[ElementTree], bool] | FilterTransform[ElementTree] | FilterOperation[ElementTree]):
                 Predicate callable, ``FilterTransform``, or ``FilterOperation``.
+            dataset_options (DatasetOptions | None):
+                Optional ``DatasetOptions`` configuring filter drop threshold warnings and errors.
 
         Returns:
             FilterDataset[T_co]: Filtered dataset.
         """
         op: Operation[ElementTree, ElementTree] = (
-            transform if isinstance(transform, Operation) else FilterOperation(transform)
+            transform
+            if isinstance(transform, Operation)
+            else FilterOperation(transform, dataset_options=dataset_options)
         )
         child: FilterDataset[T_co] = FilterDataset(
             self,
             _operations_override=(*self.operations, op),
             _local_ops_override=(op,),
             _step_kind="ops",
+            dataset_options=dataset_options,
         )
         return child
 
@@ -897,9 +946,16 @@ class MapDataset(Generic[T_co]):
         parent_len = len(self)
         start, stop, step = sl.indices(parent_len)
         step_range = range(start, stop, step)
-        current_range = self._slice_range if self._slice_range is not None else range(len(self._backing_source))
-        s0, s1, s2 = sl.indices(len(current_range))
-        new_source_range = current_range[s0:s1:s2]
+        if (
+            not _needs_graph_evaluation(self)
+            and (self._num_epochs is None or self._num_epochs == 1)
+            and not self._shuffled
+        ):
+            current_range = self._slice_range if self._slice_range is not None else range(len(self._backing_source))
+            s0, s1, s2 = sl.indices(len(current_range))
+            new_source_range: range | None = current_range[s0:s1:s2]
+        else:
+            new_source_range = self._slice_range
         return self._clone_with(
             slice_range=new_source_range,
             step_kind="slice",
@@ -976,6 +1032,38 @@ class MapDataset(Generic[T_co]):
 class FilterDataset(MapDataset[T_co]):
     """``MapDataset`` subclass representing a filtered dataset stage."""
 
+    def __init__(
+        self,
+        parents: (
+            MapDataset[ElementTree] | RandomAccessDataSource[T_co] | Sequence[T_co] | Sequence[MapDataset[ElementTree]]
+        ) = (),
+        *,
+        dataset_options: DatasetOptions | None = None,
+        _operations_override: tuple[Operation[ElementTree, ElementTree], ...] | None = None,
+        _local_ops_override: tuple[Operation[ElementTree, ElementTree], ...] | None = None,
+        _step_kind: _DatasetStepKind | str = _DatasetStepKind.OPS,
+    ) -> None:
+        """Initialize ``FilterDataset``.
+
+        Args:
+            parents (MapDataset[ElementTree] | RandomAccessDataSource[T_co] | Sequence[T_co] | Sequence[MapDataset[ElementTree]]):
+                Parent dataset or data source.
+            dataset_options (DatasetOptions | None):
+                Optional ``DatasetOptions`` configuring filter drop threshold warnings and errors.
+            _operations_override (tuple[Operation[ElementTree, ElementTree], ...] | None):
+                Internal cumulative operations tuple override.
+            _local_ops_override (tuple[Operation[ElementTree, ElementTree], ...] | None):
+                Internal stage-local operations tuple override.
+            _step_kind (_DatasetStepKind | str): Stage evaluation kind.
+        """
+        super().__init__(
+            parents,
+            _operations_override=_operations_override,
+            _local_ops_override=_local_ops_override,
+            _step_kind=_step_kind,
+        )
+        self.dataset_options = dataset_options
+
 
 class BatchDataset(MapDataset[T_co]):
     """``MapDataset`` subclass representing a batched dataset stage."""
@@ -1021,13 +1109,14 @@ class BatchDataset(MapDataset[T_co]):
             _shuffled_override=_shuffled_override,
             _slice_range_override=_slice_range_override,
             _num_epochs_override=_num_epochs_override,
-            _step_kind="batch",
+            _step_kind=_DatasetStepKind.BATCH,
         )
         self.batch_size = batch_size
         self.drop_remainder = drop_remainder
         self._batch_op: BatchOperation[ElementTree] = (
             batch_op if batch_op is not None else BatchOperation(batch_size, drop_remainder)
         )
+        self._compacted_cache: dict[int, list[ElementTree]] = {}
 
     def _has_upstream_filter(self) -> bool:
         """Return True if any upstream operation is a ``FilterOperation``.
@@ -1037,19 +1126,26 @@ class BatchDataset(MapDataset[T_co]):
         """
         return any(isinstance(op, FilterOperation) for op in self.operations)
 
-    def _compact_non_none_elements(self) -> list[ElementTree]:
-        """Collect all non-None elements from the parent ``MapDataset``.
+    def _compact_non_none_elements(self, epoch_offset: int = 0) -> list[ElementTree]:
+        """Collect and cache all non-None elements from the parent ``MapDataset`` for ``epoch_offset``.
+
+        Args:
+            epoch_offset (int): Upstream repeat epoch offset.
 
         Returns:
             list[ElementTree]: Filtered list of non-None parent elements.
         """
+        cached = self._compacted_cache.get(epoch_offset)
+        if cached is not None:
+            return cached
         parent = self.parents[0]
         parent_len = len(parent)
         items: list[ElementTree] = []
         for idx in range(parent_len):
-            val = parent._get_item_with_epoch(idx, epoch_offset=0)
+            val = parent._get_item_with_epoch(idx, epoch_offset=epoch_offset)
             if val is not None:
                 items.append(val)
+        self._compacted_cache[epoch_offset] = items
         return items
 
     def __len__(self) -> int:
@@ -1061,7 +1157,7 @@ class BatchDataset(MapDataset[T_co]):
         if not self.parents:
             parent_len = self._base_len()
         elif self._has_upstream_filter():
-            parent_len = len(self._compact_non_none_elements())
+            parent_len = len(self._compact_non_none_elements(epoch_offset=0))
         else:
             parent_len = len(self.parents[0])
         if parent_len == 0:
@@ -1082,7 +1178,7 @@ class BatchDataset(MapDataset[T_co]):
         """
         start_elem = index * self.batch_size
         if self._has_upstream_filter():
-            compacted = self._compact_non_none_elements()
+            compacted = self._compact_non_none_elements(epoch_offset=epoch_offset)
             end_elem = min(start_elem + self.batch_size, len(compacted))
             return self._batch_op._collate_tree(compacted[start_elem:end_elem])
 
@@ -1221,6 +1317,26 @@ class _MapDatasetDataSource(RandomAccessDataSource[ElementTree]):
         return repr(self._dataset.source)
 
 
+def _extract_filter_dataset_options(ds: MapDataset[ElementTree]) -> DatasetOptions | None:
+    """Walk the ``MapDataset`` parent chain and return the most recent ``DatasetOptions`` if configured.
+
+    Args:
+        ds (MapDataset[ElementTree]): Dataset graph to inspect.
+
+    Returns:
+        DatasetOptions | None: Configured ``DatasetOptions`` or None.
+    """
+    curr: MapDataset[ElementTree] | None = ds
+    while curr is not None:
+        if isinstance(curr, FilterDataset) and curr.dataset_options is not None:
+            return curr.dataset_options
+        for op in curr._local_ops:
+            if isinstance(op, FilterOperation) and op.dataset_options is not None:
+                return op.dataset_options
+        curr = curr.parents[0] if curr.parents else None
+    return None
+
+
 def _needs_graph_evaluation(ds: MapDataset[ElementTree]) -> bool:
     """Check whether ``ds`` requires parent-graph evaluation rather than flat ``DataLoader`` execution.
 
@@ -1230,18 +1346,42 @@ def _needs_graph_evaluation(ds: MapDataset[ElementTree]) -> bool:
     Returns:
         bool: True if ``ds`` has multi-parent mixing or non-standard stage ordering.
     """
-    seen_slice = False
+    chain: list[MapDataset[ElementTree]] = []
     curr: MapDataset[ElementTree] | None = ds
     while curr is not None:
-        if curr._step_kind == "mix":
+        if curr._step_kind is _DatasetStepKind.MIX:
             return True
-        if curr._step_kind == "repeat" and not curr._reassemble_every_epoch:
+        if curr._step_kind is _DatasetStepKind.REPEAT and not curr._reassemble_every_epoch:
             return True
-        if curr._step_kind == "slice":
-            seen_slice = True
-        elif curr._step_kind in ("shuffle", "repeat") and seen_slice:
-            return True
+        chain.append(curr)
         curr = curr.parents[0] if curr.parents else None
+
+    chain.reverse()
+    seen_ops_or_batch = False
+    seen_shuffle = False
+    seen_repeat = False
+    for idx, node in enumerate(chain):
+        kind = node._step_kind
+        if kind is _DatasetStepKind.BATCH and idx < len(chain) - 1:
+            return True
+        if kind in (_DatasetStepKind.OPS, _DatasetStepKind.BATCH):
+            if node._local_ops or kind is _DatasetStepKind.BATCH:
+                seen_ops_or_batch = True
+                if any(isinstance(op, MapWithIndexOperation) for op in node._local_ops) and (
+                    seen_shuffle or seen_repeat
+                ):
+                    return True
+        elif kind is _DatasetStepKind.SHUFFLE:
+            if seen_ops_or_batch or seen_shuffle or seen_repeat:
+                return True
+            seen_shuffle = True
+        elif kind is _DatasetStepKind.REPEAT:
+            if seen_ops_or_batch or seen_repeat:
+                return True
+            seen_repeat = True
+        elif kind is _DatasetStepKind.SLICE:
+            if seen_ops_or_batch or seen_shuffle or seen_repeat:
+                return True
     return False
 
 
@@ -1275,25 +1415,41 @@ class IterDataset(Generic[T_co]):
         self.worker_init_fn: Callable[[int, int], None] | None = worker_init_fn
         self.sequential_slice: bool = sequential_slice
 
+        source_iter_parent: IterDataset[T_co] | None = None
         if isinstance(parents, MapDataset):
             self.dataset: MapDataset[T_co] = parents
         elif isinstance(parents, IterDataset):
-            self.dataset = parents.dataset
+            source_iter_parent = parents
+            self.dataset = parents._materialize_as_map_dataset()
+        elif isinstance(parents, Sequence) and len(parents) > 0:
+            if len(parents) == 1:
+                first = parents[0]
+                if isinstance(first, MapDataset):
+                    self.dataset = first
+                else:
+                    source_iter_parent = first
+                    self.dataset = first._materialize_as_map_dataset()
+            else:
+                map_parents: list[MapDataset[T_co]] = [
+                    p if isinstance(p, MapDataset) else p._materialize_as_map_dataset() for p in parents
+                ]
+                self.dataset = MapDataset.mix(map_parents)
+        else:
+            self.dataset = MapDataset()
+
+        if source_iter_parent is not None:
             if self.read_options is None:
-                self.read_options = parents.read_options
-            self.allow_nones = self.allow_nones or parents.allow_nones
+                self.read_options = source_iter_parent.read_options
+            self.allow_nones = self.allow_nones or source_iter_parent.allow_nones
             self.multiprocessing_options = (
                 self.multiprocessing_options
                 if self.multiprocessing_options is not None
-                else parents.multiprocessing_options
+                else source_iter_parent.multiprocessing_options
             )
-            self.worker_init_fn = self.worker_init_fn if self.worker_init_fn is not None else parents.worker_init_fn
-            self.sequential_slice = self.sequential_slice or parents.sequential_slice
-        elif isinstance(parents, Sequence) and len(parents) > 0:
-            first = parents[0]
-            self.dataset = first if isinstance(first, MapDataset) else first.dataset
-        else:
-            self.dataset = MapDataset()
+            self.worker_init_fn = (
+                self.worker_init_fn if self.worker_init_fn is not None else source_iter_parent.worker_init_fn
+            )
+            self.sequential_slice = self.sequential_slice or source_iter_parent.sequential_slice
 
         worker_count = self.multiprocessing_options.num_workers if self.multiprocessing_options is not None else 0
         worker_buffer_size = (
@@ -1311,8 +1467,9 @@ class IterDataset(Generic[T_co]):
             total_len = len(self.dataset)
             graph_source: RandomAccessDataSource[ElementTree] = _MapDatasetDataSource(self.dataset)
             graph_sampler: Sampler = IndexSampler(num_records=total_len) if total_len > 0 else Sampler()
+            filter_opts = _extract_filter_dataset_options(self.dataset)
             graph_ops: tuple[Operation[ElementTree, ElementTree], ...] = (
-                () if self.allow_nones else (FilterOperation(lambda x: x is not None),)
+                () if self.allow_nones else (FilterOperation(lambda x: x is not None, dataset_options=filter_opts),)
             )
             self.dl: DataLoader[ElementTree] = DataLoader(
                 data_source=graph_source,
@@ -1322,6 +1479,7 @@ class IterDataset(Generic[T_co]):
                 worker_buffer_size=worker_buffer_size,
                 read_options=self.read_options,
                 enable_profiling=enable_profiling,
+                sequential_slice=self.sequential_slice,
             )
         else:
             base_len = self.dataset._base_len()
@@ -1348,8 +1506,9 @@ class IterDataset(Generic[T_co]):
                 worker_buffer_size=worker_buffer_size,
                 read_options=self.read_options,
                 enable_profiling=enable_profiling,
+                sequential_slice=self.sequential_slice,
             )
-        self._iter: DataLoaderIterator[ElementTree] = iter(self.dl)
+        self._iter: DataLoaderIterator[ElementTree] | None = None
 
     def _materialize_as_map_dataset(self) -> MapDataset[T_co]:
         """Return the backing ``MapDataset`` for this ``IterDataset``.
@@ -1420,18 +1579,22 @@ class IterDataset(Generic[T_co]):
     def filter(
         self,
         transform: (Callable[[ElementTree], bool] | FilterTransform[ElementTree] | FilterOperation[ElementTree]),
+        *,
+        dataset_options: DatasetOptions | None = None,
     ) -> IterDataset[T_co]:
         """Filter elements of this ``IterDataset`` matching ``transform``.
 
         Args:
             transform (Callable[[ElementTree], bool] | FilterTransform[ElementTree] | FilterOperation[ElementTree]):
                 Filter predicate callable, ``FilterTransform``, or ``FilterOperation``.
+            dataset_options (DatasetOptions | None):
+                Optional ``DatasetOptions`` configuring filter drop threshold warnings and errors.
 
         Returns:
             IterDataset[T_co]: Filtered ``IterDataset``.
         """
         base_ds = self._materialize_as_map_dataset()
-        filtered_ds = base_ds.filter(transform)
+        filtered_ds = base_ds.filter(transform, dataset_options=dataset_options)
         return IterDataset(
             filtered_ds,
             read_options=self.read_options,
@@ -1558,15 +1721,21 @@ class IterDataset(Generic[T_co]):
         Returns:
             ElementTree: Next element from the dataset.
         """
+        if self._iter is None:
+            self._iter = iter(self.dl)
         return next(self._iter)
 
     def __str__(self) -> str:
-        """Return a string representation of the ``IterDataset``.
+        """Return a canonical human-readable string representation of the ``IterDataset``.
 
         Returns:
-            str: String representation of the underlying ``DataLoader``.
+            str: Formatted ``IterDataset`` description.
         """
-        return str(self.dl)
+        return (
+            f"IterDataset(DataLoader(data_source={self.dl.data_source!r}, "
+            f"sampler={self.dl.sampler!r}, "
+            f"operations={len(self.dl.operations)}))"
+        )
 
 
 class DatasetIterator(Generic[T_co]):
@@ -1689,11 +1858,15 @@ def get_element_spec(ds: MapDataset[T_co] | IterDataset[T_co]) -> ElementTree:
     Returns:
         ElementTree: Inferred element specification or None if empty.
     """
-    target = ds.dataset if isinstance(ds, IterDataset) else ds
-    if len(target) == 0:
+    target = ds._materialize_as_map_dataset() if isinstance(ds, IterDataset) else ds
+    total = len(target)
+    if total == 0:
         return None
-    first_elem = target[0]
-    return spec_like(first_elem)
+    for idx in range(total):
+        elem = target[idx]
+        if elem is not None:
+            return spec_like(elem)
+    return None
 
 
 __all__ = [

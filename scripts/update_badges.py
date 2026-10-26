@@ -8,8 +8,7 @@ from pathlib import Path
 import re
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import calc_compliance, check_docstrings  # noqa: E402
+from scripts import calc_compliance, check_docstrings
 
 
 def get_color(pct: float) -> str:

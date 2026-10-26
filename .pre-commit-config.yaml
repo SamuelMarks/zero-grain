@@ -80,6 +80,6 @@ repos:
 
       - id: update-badges
         name: Update README Badges
-        entry: python3 scripts/update_badges.py
+        entry: env PYTHONPATH=. python3 -m scripts.update_badges
         language: system
         pass_filenames: false

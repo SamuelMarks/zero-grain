@@ -321,13 +321,15 @@ def _verify_single_snapshot_entry(
     if not doc.strip():
         errors.append(f"{api_path}: Missing docstring")
 
-    has_varargs = any(p_kind in ("VAR_POSITIONAL", "VAR_KEYWORD") for _, p_kind, _, _ in actual_params)
     actual_by_name = {p_name: (p_kind, has_def, has_ann) for p_name, p_kind, has_def, has_ann in actual_params}
+    for p_name, _, _, has_ann in actual_params:
+        if not has_ann:
+            errors.append(f"{api_path}: Parameter '{p_name}' is missing a type annotation")
     for exp_p in param_list:
         if not isinstance(exp_p, Mapping):
             continue
         exp_name = str(exp_p.get("name", ""))
-        if exp_name not in actual_by_name and not has_varargs:
+        if exp_name not in actual_by_name:
             errors.append(f"{api_path}: Missing minimum required parameter '{exp_name}'")
 
     return errors

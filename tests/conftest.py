@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import pytest
 import zero_grain
+from zero_grain.shared_memory_array import _cleanup_all_active_segments
 
 
 @pytest.fixture(autouse=True)
@@ -20,5 +21,6 @@ def zero_grain_test_env() -> Iterator[None]:
     try:
         yield
     finally:
+        _cleanup_all_active_segments()
         shutil.rmtree(pkg_root / "_src", ignore_errors=True)
         shutil.rmtree(pkg_root / "python" / "_src", ignore_errors=True)

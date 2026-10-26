@@ -89,8 +89,6 @@ def _open_stateful_iterator(
     Returns:
         DataLoaderIterator[T_co] | DatasetIterator[T_co]: Fresh stateful iterator.
     """
-    if isinstance(ds, DataLoader):
-        return ds.__iter__()
     return ds.__iter__()
 
 

@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from ml_switcheroo_compiler import ops as _compiler_ops
 from zero_grain._types import (
     _ZERO_JAX_NUMPY_ADAPTER,
     ArrayConvertibleProtocol,
+    CompilerDevice,
     CompilerDType,
     CompilerTensor,
+    CompilerTensorConfig,
     ElementTree,
     JaxArray,
     MappableDataclassProtocol,
     ScalarElement,
     SharedMemoryMetadataProtocol,
     ZeroArrayProtocol,
+    _infer_nested_list_and_shape,
+    _make_zero_nested_list,
     dtype_name,
     get_numpy_module,
     is_dataclass_instance,
@@ -57,9 +60,13 @@ def _convert_leaf_batch(batch: Sequence[ElementTree]) -> ElementTree:
         return _ZERO_JAX_NUMPY_ADAPTER.array(batch)
     if isinstance(first, CompilerTensor):
         tensors = [item for item in batch if isinstance(item, CompilerTensor)]
-        stacked_tensor = _compiler_ops.stack(tensors)
-        assert isinstance(stacked_tensor, CompilerTensor)
-        return stacked_tensor
+        dt_str = dtype_name(first.dtype)
+        target_dt = CompilerDType(dt_str)
+        sub_shapes = tuple(int(d) for d in first.shape)
+        stacked_shape = (len(tensors), *sub_shapes)
+        jax_wrappers: list[ElementTree] = [JaxArray(t) for t in tensors]
+        nested_payload, _, _ = _infer_nested_list_and_shape(jax_wrappers)
+        return CompilerTensor(nested_payload, CompilerTensorConfig(stacked_shape, target_dt, CompilerDevice("cpu")))
     if isinstance(first, ZeroArrayProtocol):
         from zero_chex.types import ZeroArray
 
@@ -129,6 +136,18 @@ def _batch_elements(batch: Sequence[ElementTree]) -> ElementTree:
             batched_dc_values.append(_batch_elements(col_vals))
         return _reconstruct_mappable_dataclass(first, field_names, tuple(batched_dc_values))
 
+    if is_dataclass_instance(first):
+        dc_cls = type(first)
+        mismatched_std_dc_pos: list[int] = [idx for idx, item in enumerate(batch) if type(item) is not dc_cls]
+        if mismatched_std_dc_pos:
+            mismatched_std_dc_vals: list[ElementTree] = [batch[idx] for idx in mismatched_std_dc_pos]
+            raise TypeError(
+                f"Record structures do not match. Record at position 0 has "
+                f"structure {first}, while records at positions {mismatched_std_dc_pos} "
+                f"have structures {mismatched_std_dc_vals}."
+            )
+        return _convert_leaf_batch(batch)
+
     if isinstance(first, Mapping):
         first_keys = set(first.keys())
         mismatched_positions: list[int] = []
@@ -152,6 +171,24 @@ def _batch_elements(batch: Sequence[ElementTree]) -> ElementTree:
     if is_namedtuple_instance(first):
         tuple_cls = type(first)
         field_count = len(first)
+        first_fields = first._fields
+        mismatched_nt_pos: list[int] = []
+        mismatched_nt_vals: list[ElementTree] = []
+        for idx, item in enumerate(batch):
+            if (
+                not is_namedtuple_instance(item)
+                or type(item) is not tuple_cls
+                or item._fields != first_fields
+                or len(item) != field_count
+            ):
+                mismatched_nt_pos.append(idx)
+                mismatched_nt_vals.append(item)
+        if mismatched_nt_pos:
+            raise TypeError(
+                f"Record structures do not match. Record at position 0 has "
+                f"structure {first}, while records at positions {mismatched_nt_pos} "
+                f"have structures {mismatched_nt_vals}."
+            )
         batched_fields: list[ElementTree] = []
         for field_idx in range(field_count):
             col: list[ElementTree] = [item[field_idx] for item in batch if isinstance(item, tuple)]
@@ -213,10 +250,12 @@ def _zero_like_element(element: ElementTree, pad_value: ScalarElement = 0) -> El
     if isinstance(element, JaxArray):
         return _ZERO_JAX_NUMPY_ADAPTER.zeros_like(element)
     if isinstance(element, CompilerTensor):
-        target_dt = CompilerDType(dtype_name(element.dtype))
-        zero_tensor = _compiler_ops.zeros_like(element, dtype=target_dt)
-        assert isinstance(zero_tensor, CompilerTensor)
-        return zero_tensor
+        dt_str = dtype_name(element.dtype)
+        target_dt = CompilerDType(dt_str)
+        tensor_shape = tuple(int(d) for d in element.shape)
+        zero_scalar: int | float | bool = False if dt_str == "bool" else (0 if "int" in dt_str else 0.0)
+        zeros_payload = _make_zero_nested_list(tensor_shape, zero_scalar)
+        return CompilerTensor(zeros_payload, CompilerTensorConfig(tensor_shape, target_dt, CompilerDevice("cpu")))
     if isinstance(element, ZeroArrayProtocol):
         from zero_chex.types import ZeroArray
 
@@ -257,11 +296,11 @@ def batch_and_pad(
     Returns:
         ElementTree: Batched and padded PyTree.
     """
-    if not elements:
-        return list(elements)
+    if not elements or batch_size <= 0:
+        return []
     first = elements[0]
-    pad_len = batch_size - len(elements)
-    padded_elements: list[ElementTree] = list(elements)
+    padded_elements: list[ElementTree] = list(elements[:batch_size])
+    pad_len = batch_size - len(padded_elements)
     if pad_len > 0:
         pad_elem = _zero_like_element(first, pad_value=pad_value)
         padded_elements.extend([pad_elem for _ in range(pad_len)])
