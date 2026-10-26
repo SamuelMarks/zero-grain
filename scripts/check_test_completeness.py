@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Script to verify that every public symbol exported by ``zero_grain`` is tested inside test bodies."""
+"""Script to verify that every public symbol exported by ``zero_grain`` is behaviorally tested."""
 
 from __future__ import annotations
 
@@ -26,33 +26,90 @@ def get_exported_classes(init_path: Path = Path("src/zero_grain/__init__.py")) -
                 name = alias.asname if alias.asname is not None else alias.name
                 if name and not name.startswith("_") and name != "annotations":
                     exported.add(name)
+        elif isinstance(node, ast.Assign) and isinstance(node.value, (ast.List, ast.Tuple)):
+            for elt in node.value.elts:
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str) and not elt.value.startswith("_"):
+                    exported.add(elt.value)
     return exported
 
 
+def _function_has_assertion(fn_node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Check whether ``fn_node`` contains an ``assert`` or ``self.assert*`` / ``pytest.raises`` call.
+
+    Args:
+        fn_node (ast.FunctionDef | ast.AsyncFunctionDef): Function AST node.
+
+    Returns:
+        bool: True if at least one assertion or exception check is present in ``fn_node``.
+    """
+    for node in ast.walk(fn_node):
+        if isinstance(node, ast.Assert):
+            return True
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute) and (
+                node.func.attr.startswith("assert") or node.func.attr in ("raises", "fail", "compare_output")
+            ):
+                return True
+    return False
+
+
+def _collect_symbols_in_verified_fn(
+    fn_node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> set[str]:
+    """Collect symbols invoked, instantiated, or inspected inside an assertion-bearing function.
+
+    Args:
+        fn_node (ast.FunctionDef | ast.AsyncFunctionDef): Verified test function AST node.
+
+    Returns:
+        set[str]: Set of symbol names exercised inside ``fn_node``.
+    """
+    if not _function_has_assertion(fn_node):
+        return set()
+    names: set[str] = set()
+    for node in ast.walk(fn_node):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                names.add(node.func.id)
+            for arg in list(node.args) + [kw.value for kw in node.keywords]:
+                if isinstance(arg, ast.Name):
+                    names.add(arg.id)
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            names.add(node.value.id)
+            names.add(node.attr)
+    return names
+
+
 def get_tested_names(tests_dir: Path = Path("tests")) -> set[str]:
-    """Collect all identifier names referenced inside function/class bodies under ``tests_dir``.
+    """Collect all identifier names behaviorally exercised inside test functions under ``tests_dir``.
 
     Args:
         tests_dir (Path): Root tests directory.
 
     Returns:
-        set[str]: Set of identifier names appearing inside test function or class bodies.
+        set[str]: Set of identifier names exercised inside assertion-bearing test functions or subclasses.
     """
     tested: set[str] = set()
     for test_file in sorted(tests_dir.rglob("*.py")):
         tree = ast.parse(test_file.read_text(encoding="utf-8"), filename=str(test_file))
         for top_node in tree.body:
-            if isinstance(top_node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                for node in ast.walk(top_node):
-                    if isinstance(node, ast.Name):
-                        tested.add(node.id)
-                    elif isinstance(node, ast.Attribute):
-                        tested.add(node.attr)
+            if isinstance(top_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                tested |= _collect_symbols_in_verified_fn(top_node)
+            elif isinstance(top_node, ast.ClassDef):
+                for base in top_node.bases:
+                    target_base = base.value if isinstance(base, ast.Subscript) else base
+                    if isinstance(target_base, ast.Name):
+                        tested.add(target_base.id)
+                    elif isinstance(target_base, ast.Attribute):
+                        tested.add(target_base.attr)
+                for member in top_node.body:
+                    if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        tested |= _collect_symbols_in_verified_fn(member)
     return tested
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Verify that all exported symbols in ``zero_grain`` are referenced in ``tests/`` bodies.
+    """Verify that all exported symbols in ``zero_grain`` are behaviorally tested in ``tests/``.
 
     Args:
         argv (Sequence[str] | None): Optional CLI arguments ``[init_path, tests_dir]``.

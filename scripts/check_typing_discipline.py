@@ -9,29 +9,129 @@ from pathlib import Path
 import sys
 import tokenize
 
-FORBIDDEN_BUILTINS: frozenset[str] = frozenset({"getattr", "setattr", "hasattr", "delattr", "cast"})
-FORBIDDEN_TYPES: frozenset[str] = frozenset({"Any", "object"})
+BANNED_CALL_NAMES: frozenset[str] = frozenset(
+    {
+        "getattr",
+        "setattr",
+        "hasattr",
+        "delattr",
+        "object",
+        "vars",
+        "globals",
+        "locals",
+        "eval",
+        "exec",
+        "compile",
+    }
+)
+BANNED_TYPING_ATTRS: frozenset[str] = frozenset({"Any", "cast"})
+BANNED_TYPING_MODULES: frozenset[str] = frozenset({"typing", "typing_extensions"})
+BANNED_DUNDER_ATTRS: frozenset[str] = frozenset(
+    {
+        "__name__",
+        "__dict__",
+        "__class__",
+        "__bases__",
+        "__mro__",
+        "__subclasses__",
+        "__globals__",
+    }
+)
 
 
-def _check_comments_for_type_ignore(filepath: Path) -> list[str]:
-    """Scan ``filepath`` tokens for forbidden ``# type: ignore`` comments.
+def _check_function_typing(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    filepath: Path,
+) -> list[str]:
+    """Verify explicit parameter and return type annotations on ``node``.
 
     Args:
-        filepath (Path): Python source file to inspect.
+        node (ast.FunctionDef | ast.AsyncFunctionDef): Function AST node.
+        filepath (Path): Source file path for error reporting.
 
     Returns:
-        list[str]: List of violation descriptions.
+        list[str]: List of typing violation messages.
     """
     violations: list[str] = []
-    with filepath.open("rb") as fh:
-        for tok in tokenize.tokenize(fh.readline):
-            if tok.type == tokenize.COMMENT and "type: ignore" in tok.string:
-                violations.append(f"{filepath}:{tok.start[0]}: Forbidden '# type: ignore' comment")
+    if node.returns is None:
+        violations.append(f"{filepath}:{node.lineno} Function '{node.name}' missing return type annotation.")
+
+    all_args = list(node.args.posonlyargs) + list(node.args.args) + list(node.args.kwonlyargs)
+    for idx, arg in enumerate(all_args):
+        if idx == 0 and arg.arg in ("self", "cls"):
+            continue
+        if arg.annotation is None:
+            violations.append(
+                f"{filepath}:{node.lineno} Parameter '{arg.arg}' in '{node.name}' missing type annotation."
+            )
+
+    if node.args.vararg is not None and node.args.vararg.annotation is None:
+        violations.append(f"{filepath}:{node.lineno} Variadic '*args' in '{node.name}' missing type annotation.")
+    if node.args.kwarg is not None and node.args.kwarg.annotation is None:
+        violations.append(f"{filepath}:{node.lineno} Keyword '**kwargs' in '{node.name}' missing type annotation.")
+    return violations
+
+
+def _check_ast_node_discipline(node: ast.AST, filepath: Path) -> list[str]:
+    """Check a single AST node for banned symbols, casts, reflection, and dunder hacks.
+
+    Args:
+        node (ast.AST): AST node to inspect.
+        filepath (Path): Source file path for error reporting.
+
+    Returns:
+        list[str]: List of violation messages for ``node``.
+    """
+    violations: list[str] = []
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        violations.extend(_check_function_typing(node, filepath))
+    elif isinstance(node, ast.Name):
+        if node.id in ("Any", "object"):
+            violations.append(f"{filepath}:{node.lineno} Banned type/symbol '{node.id}' used.")
+    elif isinstance(node, ast.Call):
+        if isinstance(node.func, ast.Name) and node.func.id in BANNED_CALL_NAMES | {"cast"}:
+            violations.append(f"{filepath}:{node.lineno} Banned call '{node.func.id}()' used.")
+        elif isinstance(node.func, ast.Attribute):
+            if (
+                isinstance(node.func.value, ast.Name)
+                and node.func.value.id in BANNED_TYPING_MODULES
+                and node.func.attr == "cast"
+            ):
+                violations.append(f"{filepath}:{node.lineno} Banned call '{node.func.value.id}.cast()' used.")
+            elif (
+                isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "builtins"
+                and node.func.attr in BANNED_CALL_NAMES
+            ):
+                violations.append(f"{filepath}:{node.lineno} Banned call 'builtins.{node.func.attr}()' used.")
+    elif isinstance(node, ast.ImportFrom) and node.module in BANNED_TYPING_MODULES:
+        for alias in node.names:
+            if alias.name in BANNED_TYPING_ATTRS:
+                violations.append(f"{filepath}:{node.lineno} Banned import '{node.module}.{alias.name}'.")
+    elif isinstance(node, ast.Attribute):
+        if node.attr in BANNED_DUNDER_ATTRS:
+            violations.append(f"{filepath}:{node.lineno} Banned dunder attribute access '.{node.attr}'.")
+        elif (
+            isinstance(node.value, ast.Name)
+            and node.value.id in BANNED_TYPING_MODULES
+            and node.attr in BANNED_TYPING_ATTRS
+        ):
+            violations.append(f"{filepath}:{node.lineno} Banned attribute '{node.value.id}.{node.attr}'.")
+        elif isinstance(node.value, ast.Name) and node.value.id == "builtins" and node.attr in BANNED_CALL_NAMES:
+            violations.append(f"{filepath}:{node.lineno} Banned attribute 'builtins.{node.attr}'.")
+    elif isinstance(node, ast.ExceptHandler):
+        if node.type is None:
+            violations.append(f"{filepath}:{node.lineno} Bare 'except:' handler is banned.")
+        elif isinstance(node.type, ast.Name) and node.type.id in ("Exception", "BaseException"):
+            violations.append(
+                f"{filepath}:{node.lineno} Broad 'except {node.type.id}:' handler is banned; "
+                "catch specific exception types."
+            )
     return violations
 
 
 def check_file_typing(filepath: Path) -> list[str]:
-    """Check ``filepath`` for forbidden typing shortcuts, reflection, or dunder tricks.
+    """Check ``filepath`` for typing and reflection discipline violations.
 
     Args:
         filepath (Path): Python source file to inspect.
@@ -43,72 +143,38 @@ def check_file_typing(filepath: Path) -> list[str]:
     try:
         tree = ast.parse(source, filename=str(filepath))
     except SyntaxError as exc:
-        return [f"{filepath}:{exc.lineno}: SyntaxError: {exc.msg}"]
+        return [f"{filepath}:{exc.lineno} SyntaxError: {exc.msg}"]
 
-    violations: list[str] = _check_comments_for_type_ignore(filepath)
+    violations: list[str] = []
+    with filepath.open("rb") as f:
+        for tok in tokenize.tokenize(f.readline):
+            if tok.type == tokenize.COMMENT and "type: ignore" in tok.string:
+                violations.append(f"{filepath}:{tok.start[0]} Banned '# type: ignore' comment.")
+
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "typing":
-            for alias in node.names:
-                if alias.name in ("Any", "cast"):
-                    violations.append(f"{filepath}:{node.lineno}: Forbidden import 'typing.{alias.name}'")
-
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            if node.id in FORBIDDEN_TYPES:
-                violations.append(f"{filepath}:{node.lineno}: Forbidden type reference '{node.id}'")
-
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Attribute) and target.attr == "__name__":
-                    violations.append(f"{filepath}:{node.lineno}: Forbidden dunder '__name__' reassignment")
-
-        elif isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_BUILTINS:
-                violations.append(f"{filepath}:{node.lineno}: Forbidden reflection/cast call '{node.func.id}()'")
-            elif (
-                isinstance(node.func, ast.Attribute)
-                and node.func.attr == "cast"
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "typing"
-            ):
-                violations.append(f"{filepath}:{node.lineno}: Forbidden call 'typing.cast()'")
-
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.returns is None:
-                violations.append(
-                    f"{filepath}:{node.lineno}: Function '{node.name}' is missing a return type annotation"
-                )
-            all_args = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
-            for arg in all_args:
-                if arg.arg not in ("self", "cls") and arg.annotation is None:
-                    violations.append(
-                        f"{filepath}:{node.lineno}: Parameter '{arg.arg}' in '{node.name}' is missing a type annotation"
-                    )
-            if node.args.vararg is not None and node.args.vararg.annotation is None:
-                violations.append(f"{filepath}:{node.lineno}: '*args' in '{node.name}' is missing a type annotation")
-            if node.args.kwarg is not None and node.args.kwarg.annotation is None:
-                violations.append(f"{filepath}:{node.lineno}: '**kwargs' in '{node.name}' is missing a type annotation")
+        violations.extend(_check_ast_node_discipline(node, filepath))
 
     return violations
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run typing discipline checks across target directories.
+    """CLI entry point for typing and code discipline verification.
 
     Args:
-        argv (Sequence[str] | None): Optional target directories or files.
+        argv (Sequence[str] | None): Optional CLI arguments specifying paths to check.
 
     Returns:
-        int: Zero if compliant, or 1 if any violations are detected.
+        int: Zero if all files pass, 1 otherwise.
     """
     args = list(argv) if argv is not None else sys.argv[1:]
-    targets = [Path(a) for a in args] if args else [Path("src"), Path("scripts"), Path("tests")]
+    paths = [Path(p) for p in args] if args else [Path("src"), Path("scripts"), Path("tests")]
     all_violations: list[str] = []
 
-    for target in targets:
-        if not target.exists():
-            all_violations.append(f"{target}: Path does not exist")
-            continue
-        files = [target] if target.is_file() else sorted(target.rglob("*.py"))
+    for path in paths:
+        if not path.exists():
+            print(f"Error: {path} does not exist.", file=sys.stderr)
+            return 1
+        files = [path] if path.is_file() else sorted(path.rglob("*.py"))
         for py_file in files:
             all_violations.extend(check_file_typing(py_file))
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+from multiprocessing import shared_memory
 from pathlib import Path
 from typing import NamedTuple
 import numpy as np
@@ -46,6 +48,8 @@ from zero_grain import (
     NoSharding,
     Operation,
     PyGrainCheckpointHandler,
+    PyGrainCheckpointRestore,
+    PyGrainCheckpointSave,
     PyGrainDatasetIterator,
     RandomAccessDataSource,
     RandomMap,
@@ -56,6 +60,7 @@ from zero_grain import (
     Record,
     RecordMetadata,
     Sampler,
+    SelectionWithReplacementMap,
     SequentialSampler,
     ShardByJaxProcess,
     ShardOptions,
@@ -64,6 +69,7 @@ from zero_grain import (
     SharedMemoryDataSource,
     TfRandomMap,
     TfRandomMapTransform,
+    Transformation,
     _EagerDataLoaderIterator,
     _batch_elements,
     apply_transformations,
@@ -72,6 +78,7 @@ from zero_grain import (
     create_rng,
     derive_rng,
     even_split,
+    experimental,
     fake_class,
     get_element_spec,
     load,
@@ -82,7 +89,19 @@ from zero_grain import (
     spec_like,
     transforms,
 )
-from zero_grain._types import ElementTree, RNGGeneratorProtocol
+from zero_grain._tree import _leaf_type_spec
+from zero_grain._types import ElementTree, RNGGeneratorProtocol, is_dataclass_instance
+from zero_grain.experimental import (
+    FirstFitPackIterDataset,
+    FlatMapIterDataset,
+    InterleaveIterDataset,
+    ThreadPrefetchIterDataset,
+)
+from zero_grain.shared_memory_array import (
+    _allocate_shared_memory_segment,
+    _dtype_itemsize,
+    _release_shared_memory_segment,
+)
 
 
 class _SamplePair(NamedTuple):
@@ -90,6 +109,45 @@ class _SamplePair(NamedTuple):
 
     left: int | str
     right: int | str
+
+
+@dataclasses.dataclass
+class _SampleBox:
+    """Sample dataclass for testing ``is_dataclass_instance`` and ``spec_like``."""
+
+    value: int
+
+
+class _AddRandomOffset(TfRandomMapTransform[int, int]):
+    """Concrete ``TfRandomMapTransform`` subclass for behavioral testing."""
+
+    def random_map(self, element: int, rng: RNGGeneratorProtocol) -> int:
+        """Add a deterministic random integer in ``[10, 100)`` to ``element``.
+
+        Args:
+            element (int): Input integer.
+            rng (RNGGeneratorProtocol): Per-record RNG.
+
+        Returns:
+            int: Offset integer.
+        """
+        return element + rng.integers(10, 100)
+
+
+class _AddRandomOffsetAlias(TfRandomMap[int, int]):
+    """Concrete ``TfRandomMap`` subclass for behavioral testing."""
+
+    def random_map(self, element: int, rng: RNGGeneratorProtocol) -> int:
+        """Add a deterministic random integer in ``[10, 100)`` to ``element``.
+
+        Args:
+            element (int): Input integer.
+            rng (RNGGeneratorProtocol): Per-record RNG.
+
+        Returns:
+            int: Offset integer.
+        """
+        return element + rng.integers(10, 100)
 
 
 def test_record_metadata() -> None:
@@ -131,8 +189,8 @@ def test_rng_utilities() -> None:
     assert 5 <= gen1.integers(5, 8) < 8
     perm4 = gen1.permutation(4)
     perm3 = gen1.permutation([10, 20, 30])
-    assert sorted(list(perm4)) == [0, 1, 2, 3]
-    assert sorted(list(perm3)) == [10, 20, 30]
+    assert isinstance(perm4, list) and sorted(perm4) == [0, 1, 2, 3]
+    assert isinstance(perm3, list) and sorted(perm3) == [10, 20, 30]
     assert repr(gen1) == "Generator(PCG64)"
 
     derived = derive_rng(None, 3, op_seed=1)
@@ -149,12 +207,20 @@ def test_batch_and_dataset_options() -> None:
     with pytest.raises(ValueError, match="batch_size must be positive"):
         Batch(batch_size=0)
 
+    bt: BatchTransform[int, list[int]] = BatchTransform(batch_size=2, drop_remainder=False)
+    assert bt.batch_size == 2
+    assert bt.drop_remainder is False
+
     opt = DatasetOptions(
         filter_warn_threshold_ratio=0.5,
         filter_raise_threshold_ratio=0.8,
     )
     assert opt.filter_warn_threshold_ratio == 0.5
     assert opt.filter_raise_threshold_ratio == 0.8
+    with pytest.raises(ValueError, match="filter_warn_threshold_ratio"):
+        DatasetOptions(filter_warn_threshold_ratio=1.5)
+    with pytest.raises(ValueError, match="filter_raise_threshold_ratio"):
+        DatasetOptions(filter_raise_threshold_ratio=-0.1)
 
     mp1 = MultiprocessingOptions(num_workers=2, per_worker_buffer_size=4)
     mp2 = MultiprocessingOptions(num_workers=2, per_worker_buffer_size=4)
@@ -246,6 +312,7 @@ def test_sharding() -> None:
     """Verify ``ShardOptions``, ``NoSharding``, ``ShardByJaxProcess``, and ``even_split``."""
     so = ShardOptions(shard_index=1, shard_count=2, drop_remainder=True)
     assert so.shard_index == 1
+    assert repr(so) == "ShardOptions(shard_index=1, shard_count=2, drop_remainder=True)"
     assert so == ShardOptions(shard_index=1, shard_count=2, drop_remainder=True)
     assert so != ShardOptions(shard_index=0, shard_count=2, drop_remainder=True)
     with pytest.raises(ValueError, match="Invalid shard_index"):
@@ -255,7 +322,8 @@ def test_sharding() -> None:
     assert repr(ns) == "NoSharding(shard_index=0, shard_count=1, drop_remainder=False)"
     sb = ShardByJaxProcess(drop_remainder=True)
     assert sb.drop_remainder is True
-    assert sharding.ShardOptions is ShardOptions
+    assert repr(sb) == "ShardByJaxProcess(shard_index=0, shard_count=1, drop_remainder=True)"
+    assert sharding.ShardOptions(0, 1) == ShardOptions(0, 1)
     assert even_split(10, ShardOptions(0, 3, drop_remainder=True)) == (0, 3)
     assert even_split(10, ShardOptions(0, 3, drop_remainder=False)) == (0, 4)
 
@@ -286,6 +354,11 @@ def test_samplers() -> None:
     with pytest.raises(ValueError, match="num_records must be positive"):
         IndexSampler(num_records=0)
 
+    iss_drop = IndexSampler(num_records=10, shard_options=NoSharding(0, 2, True), num_epochs=1)
+    assert len(iss_drop) == 10
+    iss_drop_uneven = IndexSampler(num_records=9, shard_options=NoSharding(0, 2, True), num_epochs=1)
+    assert len(iss_drop_uneven) == 8
+
 
 def test_transforms_and_operations() -> None:
     """Verify transform base classes, operation classes, and PyTree batching."""
@@ -304,6 +377,27 @@ def test_transforms_and_operations() -> None:
         ft.filter(1)
     with pytest.raises(NotImplementedError):
         fmt.flat_map(1)
+
+    map_alias: Map[int, int] = Map()
+    mwi_alias: MapWithIndex[int, int] = MapWithIndex()
+    rm_alias: RandomMap[int, int] = RandomMap()
+    filt_alias: Filter[int] = Filter()
+    flat_alias: FlatMap[int, int] = FlatMap()
+    with pytest.raises(NotImplementedError):
+        map_alias.map(1)
+    with pytest.raises(NotImplementedError):
+        mwi_alias.map_with_index(0, 1)
+    with pytest.raises(NotImplementedError):
+        rm_alias.random_map(1, create_rng(0))
+    with pytest.raises(NotImplementedError):
+        filt_alias.filter(1)
+    with pytest.raises(NotImplementedError):
+        flat_alias.flat_map(1)
+
+    tf_rm = _AddRandomOffset()
+    tf_rm_alias = _AddRandomOffsetAlias()
+    assert tf_rm.random_map(5, create_rng(7)) == tf_rm_alias.random_map(5, create_rng(7))
+    assert tf_rm.random_map(5, create_rng(7)) >= 15
 
     mo: MapOperation[int, int] = MapOperation()
     mwio: MapWithIndexOperation[int, int] = MapWithIndexOperation()
@@ -333,9 +427,13 @@ def test_transforms_and_operations() -> None:
     out_mwi = list(mwi_op([in_rec]))
     assert out_mwi[0].data == 5
 
-    rm_op: RandomMapOperation[int, int] = RandomMapOperation(lambda x, rng: x + rng.integers(0, 1))
-    out_rm = list(rm_op([Record(metadata=RecordMetadata(index=0, rng=None), data=7)]))
-    assert out_rm[0].data == 7
+    rm_op: RandomMapOperation[int, int] = RandomMapOperation(lambda x, rng: x + rng.integers(10, 1000))
+    out_rm_0 = list(rm_op([Record(metadata=RecordMetadata(index=0, rng=None), data=7)]))
+    out_rm_0_repeat = list(rm_op([Record(metadata=RecordMetadata(index=0, rng=None), data=7)]))
+    out_rm_1 = list(rm_op([Record(metadata=RecordMetadata(index=1, rng=None), data=7)]))
+    assert out_rm_0[0].data == out_rm_0_repeat[0].data
+    assert out_rm_0[0].data != 7
+    assert out_rm_0[0].data != out_rm_1[0].data
 
     fm_op: FlatMapOperation[int, int] = FlatMapOperation(lambda x: [x, x + 1])
     out_fm = list(fm_op([Record(metadata=RecordMetadata(index=0), data=3)]))
@@ -358,9 +456,14 @@ def test_transforms_and_operations() -> None:
     assert [r.data for r in out_b] == [5, 4]
 
     shm_op = CopyNumPyArrayToSharedMemoryOperation()
+    shm_alias = CopyNumPyArrayToSharedMemory()
     shm_rec: Record[ElementTree] = Record(metadata=RecordMetadata(index=0), data=np.array([1, 2]))
     shm_out = list(shm_op([shm_rec]))
     assert isinstance(shm_out[0].data, SharedMemoryArrayMetadata)
+    shm_out[0].data.close_and_unlink()
+    shm_alias_meta = shm_alias.map(np.array([3, 4]))
+    assert isinstance(shm_alias_meta, SharedMemoryArrayMetadata)
+    shm_alias_meta.close_and_unlink()
 
     assert np.array_equal(_batch_elements([1, 2]), np.array([1, 2]))
     assert _batch_elements([]) == []
@@ -369,14 +472,83 @@ def test_transforms_and_operations() -> None:
     assert isinstance(padded_pair, _SamplePair)
     padded_tuple = batch_and_pad([(1.5, "a")], 2)
     assert isinstance(padded_tuple, tuple)
+    padded_bool = batch_and_pad([True], 2)
+    assert isinstance(padded_bool, np.ndarray) and padded_bool.tolist() == [True, False]
     padded_list = batch_and_pad([[1, 2]], 2)
     assert isinstance(padded_list, (list, np.ndarray))
     assert len(padded_list) == 2
 
-    mapped = map_tree(lambda x: x, _SamplePair(1, 2))
-    assert mapped == _SamplePair(1, 2)
+    mapped = map_tree(lambda x: int(x) * 10 if isinstance(x, int) else x, _SamplePair(1, 2))
+    assert mapped == _SamplePair(10, 20)
     assert spec_like(_SamplePair(1, 2)) == _SamplePair("int", "int")
     assert spec_like((1, [2])) == ("int", ["int"])
+
+
+def test_leaf_type_spec_and_shared_memory_branches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify all branches of ``_leaf_type_spec`` and ``shared_memory_array`` helpers.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+    """
+    box = _SampleBox(value=42)
+    assert is_dataclass_instance(box) is True
+    assert _leaf_type_spec(None) == "NoneType"
+    assert _leaf_type_spec(True) == "bool"
+    assert _leaf_type_spec(3) == "int"
+    assert _leaf_type_spec(1.5) == "float"
+    assert _leaf_type_spec(1 + 2j) == "complex"
+    assert _leaf_type_spec("abc") == "str"
+    assert _leaf_type_spec(b"abc") == "bytes"
+    assert _leaf_type_spec(box) == "dataclass"
+    assert _leaf_type_spec(SharedMemoryArrayMetadata(name="s", shape=(2, 3))) == ("SharedMemoryArrayMetadata[2, 3]")
+
+    class _ConvLeaf:
+        """Convertible leaf object."""
+
+        def __array__(self) -> np.ndarray:
+            """Return 1D float32 array.
+
+            Returns:
+                np.ndarray: 1D float32 array.
+            """
+            return np.zeros((4,), dtype=np.float32)
+
+    assert _leaf_type_spec(_ConvLeaf()) == "float32[4]"
+    assert _leaf_type_spec([1]) == "unknown"
+
+    assert _dtype_itemsize("float64") == 8
+    assert _dtype_itemsize("float32") == 4
+    assert _dtype_itemsize("float16") == 2
+    assert _dtype_itemsize("uint8") == 1
+    assert _dtype_itemsize("custom_unknown") == 8
+
+    sma_pos = SharedMemoryArray((2, 2), "float32")
+    assert sma_pos.metadata.shape == (2, 2)
+    assert sma_pos.metadata.dtype == "float32"
+    sma_pos.unlink_on_del()
+    sma_pos.unlink_on_del()
+
+    def _raise_os_error(create: bool = True, size: int = 1) -> shared_memory.SharedMemory:
+        """Simulate ``SharedMemory`` allocation failure.
+
+        Args:
+            create (bool): Create flag.
+            size (int): Segment byte size.
+
+        Returns:
+            shared_memory.SharedMemory: Never returns.
+
+        Raises:
+            OSError: Always raised.
+        """
+        del create, size
+        raise OSError("shm allocation failed")
+
+    monkeypatch.setattr(shared_memory, "SharedMemory", _raise_os_error)
+    fallback_name, seg = _allocate_shared_memory_segment(16)
+    assert fallback_name.startswith("zero_grain_shm_")
+    assert seg is None
+    _release_shared_memory_segment("nonexistent_segment")
 
 
 def test_data_loader_and_checkpoint_handler(tmp_path: Path) -> None:
@@ -385,17 +557,19 @@ def test_data_loader_and_checkpoint_handler(tmp_path: Path) -> None:
     Args:
         tmp_path (Path): Pytest temporary directory fixture.
     """
-    dl_opts = DataLoaderOptions(worker_count=2)
-    dl = DataLoader(data_source=InMemoryDataSource([10, 20]), options=dl_opts)
+    dl_opts = DataLoaderOptions(worker_count=2, read_options=ReadOptions(num_threads=4))
+    dl = DataLoader(data_source=InMemoryDataSource([10, 20]), worker_count=None, options=dl_opts)
     assert dl.worker_count == 2
+    assert dl.read_options is not None and dl.read_options.num_threads == 4
     it = iter(dl)
     assert iter(it) is it
     it.start_prefetch()
     assert next(it) == 10
 
-    ch = PyGrainCheckpointHandler()
+    ch = CheckpointHandler()
+    ch_alias = PyGrainCheckpointHandler()
     ch.save(None, None)
-    assert ch.restore(None, None) is None
+    assert ch_alias.restore(None, None) is None
     assert ch.restore(tmp_path / "nonexistent", it) is it
 
     ckpt_dir = tmp_path / "ckpt"
@@ -404,7 +578,7 @@ def test_data_loader_and_checkpoint_handler(tmp_path: Path) -> None:
     restored = ch.restore(ckpt_dir, raw_state)
     assert isinstance(restored, dict)
 
-    it2 = iter(dl)
+    it2 = _EagerDataLoaderIterator(dl)
     ch.restore(ckpt_dir, it2)
     assert next(it2) == 20
     with pytest.raises(StopIteration):
@@ -412,6 +586,10 @@ def test_data_loader_and_checkpoint_handler(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="worker_count"):
         it2.set_state({"worker_count": 99})
+    with pytest.raises(ValueError, match="sampler"):
+        it2.set_state({"sampler": "MismatchedSampler()"})
+    with pytest.raises(ValueError, match="data_source"):
+        it2.set_state({"data_source": "MismatchedDataSource()"})
 
     assert_equal_output_after_checkpoint(None)
     assert_equal_output_after_checkpoint(Dataset.range(3).to_iter_dataset())
@@ -458,18 +636,17 @@ def test_datasets() -> None:
         """
         return i + int(x) if isinstance(x, int) else x
 
-    def _keep_rng(x: ElementTree, rng: RNGGeneratorProtocol) -> ElementTree:
-        """Return ``x`` with deterministic RNG consumed.
+    def _add_rng(x: ElementTree, rng: RNGGeneratorProtocol) -> ElementTree:
+        """Return ``x + rng.integers(100, 200)``.
 
         Args:
             x (ElementTree): Input element.
             rng (RNGGeneratorProtocol): Per-record RNG.
 
         Returns:
-            ElementTree: ``x``.
+            ElementTree: Offset element.
         """
-        _ = rng.random()
-        return x
+        return (int(x) if isinstance(x, int) else 0) + rng.integers(100, 200)
 
     def _gt_one(x: ElementTree) -> bool:
         """Return True if ``x > 1``.
@@ -484,8 +661,9 @@ def test_datasets() -> None:
 
     md: MapDataset[int] = ds.map(_double)
     mwi: MapDataset[int] = ds.map_with_index(_add_idx)
-    rmd: MapDataset[int] = ds.random_map(_keep_rng, seed=3)
-    fd = ds.filter(_gt_one)
+    rmd: MapDataset[int] = ds.random_map(_add_rng, seed=3)
+    rmd_repeat: MapDataset[int] = ds.random_map(_add_rng, seed=3)
+    fd: FilterDataset[int] = ds.filter(_gt_one)
     bd: BatchDataset[list[int]] = ds.batch(2)
     bd_drop: BatchDataset[list[int]] = ds.batch(2, drop_remainder=True)
 
@@ -493,14 +671,21 @@ def test_datasets() -> None:
     assert md[2] == 4
     assert list(mwi) == [0, 2, 4, 6, 8]
     assert mwi[3] == 6
-    assert list(rmd) == [0, 1, 2, 3, 4]
-    assert rmd[4] == 4
+    assert list(rmd) == [rmd[i] for i in range(5)]
+    assert list(rmd) == list(rmd_repeat)
+    assert list(rmd) != [0, 1, 2, 3, 4]
+    assert all(100 <= val < 205 for val in rmd if isinstance(val, int))
     assert list(fd) == [2, 3, 4]
     assert fd[0] is None
     assert fd[2] == 2
+    fd_mapped: MapDataset[int] = fd.map(_double)
+    assert fd_mapped[0] is None
+    assert fd_mapped[2] == 4
     assert len(bd) == 3
     assert len(bd_drop) == 2
-    assert len(BatchDataset()) == 0
+    empty_bd: BatchDataset[int] = BatchDataset(batch_size=2)
+    assert len(empty_bd) == 0
+    assert empty_bd._get_item_with_epoch(0) == []
     b0 = bd[0]
     b_last = bd[-1]
     assert isinstance(b0, np.ndarray) and b0.tolist() == [0, 1]
@@ -515,14 +700,55 @@ def test_datasets() -> None:
     assert set(shuffled_ds) == {0, 1, 2, 3, 4}
     assert list(shuffled_ds) != [0, 1, 2, 3, 4]
     assert [shuffled_ds[i] for i in range(5)] == list(shuffled_ds)
+
+    # Verify chained shuffle -> slice and repeat -> slice preserve stage order
+    shuffled_sliced = shuffled_ds.slice(slice(1, 4))
+    assert len(shuffled_sliced) == 3
+    assert [shuffled_sliced[i] for i in range(3)] == [shuffled_ds[1], shuffled_ds[2], shuffled_ds[3]]
+    assert list(shuffled_sliced) == [shuffled_ds[1], shuffled_ds[2], shuffled_ds[3]]
+    assert repr(shuffled_sliced.to_iter_dataset().dl.data_source) == repr(ds.source)
+
+    # Verify single-element shuffle
+    single_shuffled = Dataset.range(1).shuffle(seed=4)
+    assert list(single_shuffled) == [0]
+    assert single_shuffled[0] == 0
+
+    # Verify ds.seed(1) does not mutate parent ds._seed
+    assert ds._seed is None
     seeded_ds = ds.seed(1)
+    assert ds._seed is None
     assert seeded_ds._seed == 1
+
     sliced_ds = ds.slice(slice(1, 4))
     assert list(sliced_ds) == [1, 2, 3]
     assert [sliced_ds[i] for i in range(len(sliced_ds))] == [1, 2, 3]
     repeated_ds = ds.repeat(2)
     assert list(repeated_ds) == [0, 1, 2, 3, 4, 0, 1, 2, 3, 4]
     assert [repeated_ds[i] for i in range(len(repeated_ds))] == [0, 1, 2, 3, 4, 0, 1, 2, 3, 4]
+
+    # Verify multi-parent MapDataset mixing with DatasetSelectionMap
+    ds_a = Dataset.source_dataset([10, 20])
+    ds_b = Dataset.source_dataset([100, 200])
+    mixed_ds: MapDataset[int] = MapDataset([ds_a, ds_b])
+    assert len(mixed_ds) == 4
+    assert [mixed_ds[i] for i in range(4)] == [10, 100, 20, 200]
+    assert list(mixed_ds) == [10, 100, 20, 200]
+
+    sel_map = DatasetSelectionMap([2, 1])
+    assert len(sel_map) == 3
+    assert sel_map[0] == (0, 0)
+    assert sel_map[1] == (1, 0)
+    assert sel_map[-1] == (0, 1)
+    with pytest.raises(IndexError):
+        _ = sel_map[5]
+    empty_sel_map = DatasetSelectionMap()
+    assert len(empty_sel_map) == 0
+    assert empty_sel_map[2] == (0, 2)
+    with pytest.raises(IndexError):
+        _ = empty_sel_map[-1]
+    single_sel_map = DatasetSelectionMap(3)
+    assert len(single_sel_map) == 3
+    assert single_sel_map[2] == (0, 2)
 
     id_ds = ds.to_iter_dataset()
     assert next(id_ds) == 0
@@ -589,7 +815,7 @@ def test_utils_and_misc() -> None:
     sma = SharedMemoryArray(name="custom_shm", shape=(2, 3), dtype="int32")
     assert sma.metadata.shape == (2, 3)
     sma.unlink_on_del()
-    sm_meta = SharedMemoryArrayMetadata(name="seg", shape=(2,))
+    sm_meta = shared_memory_array.SharedMemoryArrayMetadata(name="seg", shape=(2,))
     assert sm_meta == SharedMemoryArrayMetadata(name="seg", shape=(2,))
     assert sm_meta != SharedMemoryArrayMetadata(name="other", shape=(2,))
     assert "SharedMemoryArrayMetadata" in repr(sm_meta)
@@ -601,21 +827,481 @@ def test_utils_and_misc() -> None:
     assert inst.args == (1,)
     assert inst.kwargs == {"k": 2}
 
-    assert shared_memory_array.SharedMemoryArrayMetadata is SharedMemoryArrayMetadata
-    assert transforms.BatchTransform is BatchTransform
-    assert transforms.Map is Map
-    assert transforms.MapWithIndex is MapWithIndex
-    assert transforms.RandomMap is RandomMap
-    assert transforms.TfRandomMap is TfRandomMap
-    assert transforms.TfRandomMapTransform is TfRandomMapTransform
-    assert transforms.Filter is Filter
-    assert transforms.FlatMap is FlatMap
-    assert CheckpointHandler is PyGrainCheckpointHandler
-    assert CopyNumPyArrayToSharedMemory is CopyNumPyArrayToSharedMemoryOperation
-    assert _EagerDataLoaderIterator is PyGrainDatasetIterator
-    assert python.DataLoader is DataLoader
-    empty_bd: BatchDataset[int] = BatchDataset()
-    empty_fd: FilterDataset[int] = FilterDataset()
-    assert isinstance(DatasetSelectionMap(), DatasetSelectionMap)
-    assert isinstance(empty_bd, BatchDataset)
-    assert isinstance(empty_fd, FilterDataset)
+    # Behavioral verification of module namespace exports
+    py_loader = python.DataLoader(data_source=InMemoryDataSource([5, 6]))
+    assert list(py_loader) == [5, 6]
+    tr_batch: BatchTransform[int, list[int]] = transforms.BatchTransform(batch_size=2)
+    assert tr_batch.batch_size == 2
+    manual_fd: FilterDataset[int] = FilterDataset(
+        ds,
+        _local_ops_override=(FilterOperation(lambda x: isinstance(x, int) and x != 0),),
+    )
+    assert manual_fd[0] is None
+    assert manual_fd[1] == 1
+
+
+def test_ecosystem_orbax_checkpointing(tmp_path: Path) -> None:
+    """Verify ``PyGrainCheckpointHandler``, ``Checkpointer``, ``CheckpointManager``, and ``CompositeCheckpointHandler``.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
+    import zero_orbax.checkpoint as ocp
+
+    dl: DataLoader[int] = DataLoader(
+        data_source=RangeDataSource(0, 6, 1),
+        sampler=SequentialSampler(6),
+    )
+    it1 = iter(dl)
+    assert next(it1) == 0
+    assert next(it1) == 1
+
+    handler = PyGrainCheckpointHandler()
+    assert handler.metadata(None) is None
+    checkpointer = ocp.Checkpointer(handler)
+
+    # Save and restore on local disk via Checkpointer and PyGrainCheckpointHandler
+    local_dir = tmp_path / "orbax_local"
+    checkpointer.save(local_dir, it1)
+    handler.save(local_dir, PyGrainCheckpointSave(it1))
+    struct_local = handler.structure(local_dir)
+    assert isinstance(struct_local, dict) and struct_local.get("version") == 2
+    assert handler.structure(None) == {}
+    assert handler.structure(tmp_path / "nonexistent_dir") == {}
+    meta_local = handler.metadata(local_dir)
+    assert isinstance(meta_local, dict) and meta_local.get("version") == 2
+    assert handler.metadata(None) is not None
+    assert handler.metadata(tmp_path / "nonexistent_dir") is not None
+
+    it1_restored = iter(dl)
+    handler.restore(local_dir, PyGrainCheckpointRestore(it1_restored))
+    assert list(it1_restored) == [2, 3, 4, 5]
+    it1_restored_cp = iter(dl)
+    checkpointer.restore(local_dir, it1_restored_cp)
+    assert list(it1_restored_cp) == [2, 3, 4, 5]
+
+    # Save and restore DatasetIterator via virtual memory:// URI and CheckpointManager
+    ds_iter = iter(MapDataset.range(5).to_iter_dataset())
+    assert next(ds_iter) == 0
+    assert next(ds_iter) == 1
+
+    mem_uri = "memory://grain_ckpt_manager"
+    mgr = ocp.CheckpointManager(
+        mem_uri,
+        checkpointers=ocp.Checkpointer(PyGrainCheckpointHandler()),
+    )
+    assert mgr.save(1, items=ds_iter) is True
+    ds_iter_restored = iter(MapDataset.range(5).to_iter_dataset())
+    mgr.restore(1, items=ds_iter_restored)
+    assert list(ds_iter_restored) == [2, 3, 4]
+    mgr.close()
+
+    # Joint composite checkpointing of DataLoaderIterator (PyGrainCheckpointSave) and PyTree state (PyTreeSave)
+    comp_dir = tmp_path / "orbax_composite"
+    it_comp = iter(dl)
+    assert next(it_comp) == 0
+    assert next(it_comp) == 1
+    assert next(it_comp) == 2
+
+    comp_mgr = ocp.CheckpointManager(comp_dir, item_names=("data", "state"))
+    assert (
+        comp_mgr.save(
+            1,
+            args=ocp.args.Composite(
+                data=PyGrainCheckpointSave(it_comp),
+                state=ocp.args.PyTreeSave({"step": 3, "lr": 0.01}),
+            ),
+        )
+        is True
+    )
+    it_comp_restored = iter(dl)
+    restored_bundle = comp_mgr.restore(
+        1,
+        args=ocp.args.Composite(
+            data=PyGrainCheckpointRestore(it_comp_restored),
+            state=ocp.args.PyTreeRestore({"step": 0, "lr": 0.0}),
+        ),
+    )
+    assert isinstance(restored_bundle, dict)
+    assert restored_bundle["state"] == {"step": 3, "lr": 0.01}
+    assert list(it_comp_restored) == [3, 4, 5]
+    comp_mgr.close()
+
+    comp_handler = ocp.CompositeCheckpointHandler("data", "state")
+    comp_dir_direct = tmp_path / "orbax_composite_direct"
+    it_comp2 = iter(dl)
+    assert next(it_comp2) == 0
+    comp_handler.save(
+        comp_dir_direct,
+        {"data": it_comp2, "state": {"step": 1}},
+    )
+    it_comp2_restored = iter(dl)
+    restored_direct = comp_handler.restore(
+        comp_dir_direct,
+        {"data": it_comp2_restored, "state": {"step": 0}},
+    )
+    assert isinstance(restored_direct, dict)
+    assert list(it_comp2_restored) == [1, 2, 3, 4, 5]
+    comp_handler.close()
+    checkpointer.close()
+
+    # Verify _unwrap_iterator_arg edge cases (keyword item/args, positional args, non-iterator args)
+    kw_dir = tmp_path / "kw_ckpt"
+    handler.save(kw_dir, None, it1_restored, process_index=0, process_count=1)
+    it_kw = iter(dl)
+    handler.restore(kw_dir, None, args=PyGrainCheckpointRestore(it_kw))
+    handler.save(kw_dir, item=PyGrainCheckpointSave(it_kw))
+    handler.restore(kw_dir, item=it_kw)
+    handler.save(kw_dir, PyGrainCheckpointSave(None))
+    assert handler.restore(None, item=PyGrainCheckpointRestore(None)) is None
+
+
+def test_ecosystem_chex_jax_flax_optax_integration() -> None:
+    """Verify ``zero_chex``, ``zero_jax``, ``zero_flax``, and ``CompilerTensor`` integration."""
+    from ml_switcheroo_compiler import ops as compiler_ops
+    from ml_switcheroo_compiler.core.dtype import DType as CompilerDType
+    from ml_switcheroo_compiler.core.tensor import Tensor as CompilerTensor
+    import zero_chex as chex
+    from zero_chex.types import ZeroArray
+    from zero_flax import nnx
+    import zero_jax
+    import zero_jax.numpy as jnp
+    from zero_jax.numpy import ndarray as JaxArray
+
+    @chex.dataclass
+    class TrainingSample:
+        """Sample record with feature vector ``x`` and scalar target ``y``."""
+
+        x: JaxArray
+        y: JaxArray
+
+    @chex.dataclass
+    class AltSample:
+        """Alternative dataclass with different structure for mismatch testing."""
+
+        z: int
+
+    def _make_jax_arr(vals: list[float] | list[list[float]] | float) -> JaxArray:
+        """Construct a typed ``JaxArray`` from Python floats.
+
+        Args:
+            vals (list[float] | list[list[float]] | float): Input float values.
+
+        Returns:
+            JaxArray: Constructed ``zero_jax`` array.
+        """
+        res = jnp.array(vals, dtype="float32")
+        assert isinstance(res, JaxArray)
+        return res
+
+    records: list[TrainingSample] = [
+        TrainingSample(x=_make_jax_arr([1.0, 2.0]), y=_make_jax_arr(3.0)),
+        TrainingSample(x=_make_jax_arr([2.0, 3.0]), y=_make_jax_arr(5.0)),
+        TrainingSample(x=_make_jax_arr([3.0, 4.0]), y=_make_jax_arr(7.0)),
+        TrainingSample(x=_make_jax_arr([4.0, 5.0]), y=_make_jax_arr(9.0)),
+    ]
+    batched_ds: MapDataset[ElementTree] = MapDataset.source_dataset(records).batch(batch_size=2)
+    batch0 = batched_ds[0]
+    assert isinstance(batch0, TrainingSample)
+    chex.assert_shape(batch0.x, (2, 2))
+    chex.assert_shape(batch0.y, (2,))
+    expected_b0 = TrainingSample(
+        x=_make_jax_arr([[1.0, 2.0], [2.0, 3.0]]),
+        y=_make_jax_arr([3.0, 5.0]),
+    )
+    chex.assert_trees_all_close({"x": batch0.x, "y": batch0.y}, {"x": expected_b0.x, "y": expected_b0.y})
+
+    # Verify batch_and_pad, spec_like, and map_tree on chex.dataclass, CompilerTensor, and ZeroArray
+    padded_dc = batch_and_pad([records[0]], batch_size=2)
+    assert isinstance(padded_dc, TrainingSample)
+    chex.assert_shape(padded_dc.x, (2, 2))
+    dc_spec = spec_like(records[0])
+    assert isinstance(dc_spec, TrainingSample)
+    assert dc_spec.x == "float32[2]"
+    mapped_dc = map_tree(lambda leaf: leaf, records[0])
+    assert isinstance(mapped_dc, TrainingSample)
+
+    with pytest.raises(TypeError, match="Record structures do not match"):
+        _batch_elements([records[0], AltSample(z=1)])
+
+    # CompilerTensor batching and padding
+    t1 = compiler_ops.array([1, 2], dtype=CompilerDType("int32"))
+    t2 = compiler_ops.array([3, 4], dtype=CompilerDType("int32"))
+    assert isinstance(t1, CompilerTensor) and isinstance(t2, CompilerTensor)
+    t_batched = _batch_elements([t1, t2])
+    assert isinstance(t_batched, CompilerTensor) and t_batched.shape == (2, 2)
+    t_padded = batch_and_pad([t1], batch_size=2)
+    assert isinstance(t_padded, CompilerTensor) and t_padded.shape == (2, 2)
+
+    # ZeroArray batching and padding
+    z1 = ZeroArray([1.0, 2.0], shape=(2,), dtype="float32")
+    z2 = ZeroArray([3.0, 4.0], shape=(2,), dtype="float32")
+    z_batched = _batch_elements([z1, z2])
+    assert isinstance(z_batched, ZeroArray) and z_batched.shape == (2, 2)
+    z_padded = batch_and_pad([z1], batch_size=2)
+    assert isinstance(z_padded, ZeroArray) and z_padded.shape == (2, 2)
+    z_key = ZeroArray([0, 42], shape=(2,), dtype="int64")
+    assert create_rng(z_key).integers(0, 1000) == create_rng(42).integers(0, 1000)
+
+    # Sharding with zero_chex.set_n_cpu_devices and PRNG interoperability
+    chex.set_n_cpu_devices(4)
+    try:
+        sharded = ShardByJaxProcess(drop_remainder=True)
+        assert sharded.shard_index == 0
+        assert sharded.shard_count == 4
+    finally:
+        chex.set_n_cpu_devices(1)
+
+    prng_key = zero_jax.random.PRNGKey(42)
+    assert isinstance(prng_key, JaxArray)
+    rng_from_key = create_rng(prng_key)
+    rng_from_int = create_rng(42)
+    assert rng_from_key.integers(0, 1000) == rng_from_int.integers(0, 1000)
+
+    flax_rngs = nnx.Rngs(77)
+    rng_from_flax = create_rng(flax_rngs)
+    assert 0 <= rng_from_flax.integers(0, 100) < 100
+    derived_from_key = derive_rng(prng_key, index=0, op_seed=1)
+    derived_from_int = derive_rng(42, index=0, op_seed=1)
+    assert derived_from_key.integers(0, 1000) == derived_from_int.integers(0, 1000)
+
+    # Feed zero_grain.DataLoader batches directly into zero_flax.nnx.Linear parameter update step
+    dl_train: DataLoader[TrainingSample] = DataLoader(
+        data_source=InMemoryDataSource(records),
+        sampler=SequentialSampler(len(records)),
+        operations=[BatchOperation(batch_size=2)],
+    )
+    model = nnx.Linear(2, 1, rngs=nnx.Rngs(0))
+    assert model.bias is not None
+
+    for batch in dl_train:
+        assert isinstance(batch, TrainingSample)
+        preds = model(batch.x)
+        assert isinstance(preds, JaxArray)
+        chex.assert_shape(preds, (2, 1))
+        grad_k = jnp.ones_like(model.kernel.value)
+        grad_b = jnp.ones_like(model.bias.value)
+        assert isinstance(grad_k, JaxArray) and isinstance(grad_b, JaxArray)
+        new_k = jnp.asarray(model.kernel.value - 0.05 * grad_k)
+        new_b = jnp.asarray(model.bias.value - 0.05 * grad_b)
+        assert isinstance(new_k, JaxArray) and isinstance(new_b, JaxArray)
+        model.kernel.value = new_k
+        model.bias.value = new_b
+
+
+def test_v005_methods_and_experimental_datasets() -> None:
+    """Verify v0.0.5 API surface including ``Transformation``, ``SelectionWithReplacementMap``, ``MapDataset``, ``IterDataset``, and ``experimental``."""
+    tr_base = Transformation(1, key="v")
+    assert isinstance(tr_base, Transformation)
+    assert issubclass(MapTransform, Transformation)
+    assert issubclass(Batch, Transformation)
+
+    # SequentialSampler num_epochs validation and multi-epoch indexing
+    with pytest.raises(ValueError, match="num_epochs must be positive"):
+        SequentialSampler(num_records=3, num_epochs=0)
+    seq_multi = SequentialSampler(num_records=2, num_epochs=2)
+    assert len(seq_multi) == 4
+    assert [seq_multi[i].record_key for i in range(4)] == [0, 1, 0, 1]
+
+    # SelectionWithReplacementMap branches
+    sel_empty = SelectionWithReplacementMap()
+    assert len(sel_empty) == 0
+    assert sel_empty.weights == ()
+    sel_default_w = SelectionWithReplacementMap(parent_lengths=[2, 2])
+    assert len(sel_default_w) == 4
+    assert sel_default_w.weights == (0.5, 0.5)
+    sel_custom = SelectionWithReplacementMap(
+        parent_lengths=[2, 3],
+        weights=[3.0, 1.0, "ignored"],
+        total_size=6,
+    )
+    assert len(sel_custom) == 6
+    assert sel_custom[0][0] == 0
+    sel_zero_total = SelectionWithReplacementMap(parent_lengths=[2, 2], total_size=0)
+    assert len(sel_zero_total) == 0
+    sel_zero_parents = SelectionWithReplacementMap(parent_lengths=[0, 0], weights=[1.0, 1.0], total_size=3)
+    assert len(sel_zero_parents) == 0
+    assert SelectionWithReplacementMap._build_weighted_replacement_mapping([2, 2], [0.5], 2) == [(0, 0), (1, 0)]
+    with pytest.raises(ValueError, match="weights must be non-negative"):
+        SelectionWithReplacementMap(parent_lengths=[2, 2], weights=[-1.0, 2.0])
+    with pytest.raises(ValueError, match="sum of weights must be positive"):
+        SelectionWithReplacementMap(parent_lengths=[2, 2], weights=[0.0, 0.0])
+
+    # MapDataset.source descriptor (class and instance access + assignment)
+    ds_src = MapDataset.source([10, 20, 30])
+    assert list(ds_src) == [10, 20, 30]
+    assert len(ds_src.source) == 3
+    ds_src.source = InMemoryDataSource([40, 50])
+    assert list(ds_src) == [40, 50]
+
+    # MapDataset.mix and MapDataset.select_from_datasets
+    assert len(MapDataset.mix([])) == 0
+    assert len(MapDataset.select_from_datasets([], sel_default_w)) == 0
+    m1 = MapDataset.source([1, 2])
+    m2 = MapDataset.source([10, 20])
+    mixed_uniform = MapDataset.mix([m1, m2])
+    assert list(mixed_uniform) == [1, 10, 2, 20]
+    mixed_weighted = MapDataset.mix([m1, m2], weights=[0.75, 0.25])
+    assert len(mixed_weighted) == 4
+    single_sel = MapDataset.select_from_datasets([m1], DatasetSelectionMap(parent_lengths=[2]))
+    assert list(single_sel) == [1, 2]
+
+    # MapDataset.repeat(reassemble_every_epoch=...) and to_iter_dataset(allow_nones=...)
+    shuffled_m1 = MapDataset.range(4).shuffle(seed=9)
+    rep_reassemble = shuffled_m1.repeat(2, reassemble_every_epoch=True)
+    rep_fixed = shuffled_m1.repeat(2, reassemble_every_epoch=False)
+    assert len(rep_reassemble) == 8
+    assert list(rep_fixed)[:4] == list(rep_fixed)[4:]
+
+    filtered_m = MapDataset.range(4).filter(lambda x: isinstance(x, int) and x % 2 == 0)
+    with_nones = list(filtered_m.to_iter_dataset(allow_nones=True))
+    assert with_nones == [0, None, 2, None]
+
+    # MapDataset.mp_prefetch and IterDataset streaming methods
+    init_calls: list[tuple[int, int]] = []
+    prefetched_iter = m1.mp_prefetch(
+        MultiprocessingOptions(num_workers=0, per_worker_buffer_size=2),
+        worker_init_fn=lambda idx, cnt: init_calls.append((idx, cnt)),
+        sequential_slice=True,
+    )
+    assert init_calls == [(0, 1)]
+    assert list(prefetched_iter) == [1, 2]
+
+    inherited_iter = IterDataset(prefetched_iter)
+    assert inherited_iter.sequential_slice is True
+    inherited_nones = IterDataset(filtered_m.to_iter_dataset(allow_nones=True))
+    assert inherited_nones.allow_nones is True
+
+    s1: IterDataset[int] = m1.to_iter_dataset().map(lambda x: x * 2 if isinstance(x, int) else 0)
+    s2: IterDataset[int] = s1.random_map(
+        lambda x, rng: (x + int(rng.integers(0, 1))) if isinstance(x, int) else 0,
+        seed=3,
+    )
+    s3: IterDataset[int] = s2.filter(lambda x: isinstance(x, int) and x > 0)
+    s4: IterDataset[list[int]] = s3.batch(batch_size=2)
+    stream_ds: IterDataset[list[int]] = s4.prefetch(MultiprocessingOptions(num_workers=0)).mp_prefetch()
+    stream_batches = list(stream_ds)
+    assert len(stream_batches) == 1
+
+    mixed_iter = IterDataset.mix([m1.to_iter_dataset(), m2], weights=[0.5, 0.5])
+    assert len(list(mixed_iter)) == 4
+
+    # Experimental datasets (both zero_grain.experimental and zero_grain.python.experimental)
+    assert experimental.FlatMapIterDataset is python.experimental.FlatMapIterDataset
+
+    class _DupFlatMap(FlatMapTransform[ElementTree, ElementTree]):
+        """Duplicate each integer element twice."""
+
+        max_fan_out = 2
+
+        def flat_map(self, element: ElementTree) -> list[ElementTree]:
+            """Return two copies of ``element``.
+
+            Args:
+                element (ElementTree): Input element.
+
+            Returns:
+                list[ElementTree]: Two-element list.
+            """
+            return [element, element]
+
+    class _TooManyFlatMap(FlatMapTransform[ElementTree, ElementTree]):
+        """Exceed ``max_fan_out`` for error testing."""
+
+        max_fan_out = 1
+
+        def flat_map(self, element: ElementTree) -> list[ElementTree]:
+            """Return two copies exceeding ``max_fan_out=1``.
+
+            Args:
+                element (ElementTree): Input element.
+
+            Returns:
+                list[ElementTree]: Two-element list.
+            """
+            return [element, element]
+
+    fm_ds = FlatMapIterDataset(m1, _DupFlatMap())
+    assert list(fm_ds) == [1, 1, 2, 2]
+    fm_callable = FlatMapIterDataset(m1.to_iter_dataset(), lambda x: [x])
+    assert list(fm_callable) == [1, 2]
+    with pytest.raises(ValueError, match="exceeds max_fan_out"):
+        FlatMapIterDataset(m1, _TooManyFlatMap())
+
+    with pytest.raises(ValueError, match="prefetch_buffer_size must be non-negative"):
+        ThreadPrefetchIterDataset(m1, prefetch_buffer_size=-1)
+    tp_map = ThreadPrefetchIterDataset(m1, prefetch_buffer_size=2)
+    assert list(tp_map) == [1, 2]
+    tp_iter = ThreadPrefetchIterDataset(m1.to_iter_dataset(), prefetch_buffer_size=0)
+    assert list(tp_iter) == [1, 2]
+
+    with pytest.raises(ValueError, match="cycle_length must be >= 1"):
+        InterleaveIterDataset([m1], cycle_length=0)
+    with pytest.raises(ValueError, match="num_make_iter_threads must be >= 1"):
+        InterleaveIterDataset([m1], cycle_length=1, num_make_iter_threads=0)
+    with pytest.raises(ValueError, match="iter_buffer_size must be >= 1"):
+        InterleaveIterDataset([m1], cycle_length=1, iter_buffer_size=0)
+    assert list(InterleaveIterDataset([], cycle_length=2)) == []
+    m_empty: MapDataset[int] = MapDataset([])
+    m3 = MapDataset.source([100, 200, 300])
+    inter_ds = InterleaveIterDataset([m_empty, m1, m2, m3, m_empty], cycle_length=2)
+    assert list(inter_ds) == [10, 1, 20, 2, 100, 200, 300]
+
+    with pytest.raises(ValueError, match="num_packing_bins must be >= 1"):
+        FirstFitPackIterDataset(m1, length_struct=4, num_packing_bins=0)
+    with pytest.raises(ValueError, match="max_sequences_per_bin must be >= 1"):
+        FirstFitPackIterDataset(m1, length_struct=4, num_packing_bins=1, max_sequences_per_bin=0)
+
+    seq_source = MapDataset.source([[1, 2], [3], [4, 5, 6]])
+    packed_unshuffled = FirstFitPackIterDataset(
+        seq_source,
+        length_struct=3,
+        num_packing_bins=1,
+        shuffle_bins=False,
+        padding_struct=0,
+        max_sequences_per_bin=2,
+    )
+    assert list(packed_unshuffled) == [[1, 2, 3], [4, 5, 6]]
+
+    packed_shuffled = FirstFitPackIterDataset(
+        MapDataset.source([1, 2, 3]),
+        length_struct=2,
+        num_packing_bins=1,
+        shuffle_bins=True,
+        max_sequences_per_bin=1,
+    )
+    assert len(list(packed_shuffled)) == 3
+
+    arr_dict_source = MapDataset.source(
+        [
+            {"a": np.array([1, 2], dtype=np.int32), "b": np.array(5, dtype=np.int32)},
+            {"a": np.array([3], dtype=np.int32), "b": np.array(6, dtype=np.int32)},
+        ]
+    )
+    packed_dict = FirstFitPackIterDataset(
+        arr_dict_source,
+        length_struct={"a": 4, "b": 2},
+        num_packing_bins=2,
+        shuffle_bins=False,
+        padding_struct={"a": 0, "b": 0},
+    )
+    packed_dict_items = list(packed_dict)
+    assert len(packed_dict_items) == 1
+    first_bin = packed_dict_items[0]
+    assert isinstance(first_bin, dict)
+    assert list(first_bin["a"]) == [1, 2, 3, 0]
+    assert list(first_bin["b"]) == [5, 6]
+
+    empty_bin_pack = FirstFitPackIterDataset(
+        MapDataset.source([[1, 2, 3, 4]]),
+        length_struct=2,
+        num_packing_bins=2,
+        shuffle_bins=False,
+    )
+    assert list(empty_bin_pack) == [[1, 2]]
+
+    from zero_grain.data_sources import ensure_testdata
+
+    generated_dir = ensure_testdata()
+    assert (generated_dir / "digits.array_record-00000-of-00002").is_file()
+    assert (generated_dir / "digits.array_record-00001-of-00002").is_file()

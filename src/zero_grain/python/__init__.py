@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from zero_grain import sharding, shared_memory_array, transforms
+from zero_grain import experimental, sharding, shared_memory_array, transforms
 from zero_grain._rng import DeterministicGenerator, create_rng, derive_rng
 from zero_grain._tree import _batch_elements, batch_and_pad, map_tree, spec_like
-from zero_grain.checkpoint import CheckpointHandler, PyGrainCheckpointHandler
+from zero_grain.checkpoint import (
+    CheckpointHandler,
+    PyGrainCheckpointHandler,
+    PyGrainCheckpointRestore,
+    PyGrainCheckpointSave,
+)
 from zero_grain.data_loader import (
     DataLoader,
     DataLoaderIterator,
@@ -29,6 +34,7 @@ from zero_grain.dataset import (
     FilterDataset,
     IterDataset,
     MapDataset,
+    SelectionWithReplacementMap,
     apply_transformations,
     get_element_spec,
 )
@@ -78,6 +84,7 @@ from zero_grain.transforms import (
     RandomMapTransform,
     TfRandomMap,
     TfRandomMapTransform,
+    Transformation,
 )
 
 __all__ = [
@@ -120,6 +127,8 @@ __all__ = [
     "NoSharding",
     "Operation",
     "PyGrainCheckpointHandler",
+    "PyGrainCheckpointRestore",
+    "PyGrainCheckpointSave",
     "PyGrainDatasetIterator",
     "RandomAccessDataSource",
     "RandomMap",
@@ -130,6 +139,7 @@ __all__ = [
     "Record",
     "RecordMetadata",
     "Sampler",
+    "SelectionWithReplacementMap",
     "SequentialSampler",
     "ShardByJaxProcess",
     "ShardOptions",
@@ -138,6 +148,7 @@ __all__ = [
     "SharedMemoryDataSource",
     "TfRandomMap",
     "TfRandomMapTransform",
+    "Transformation",
     "_EagerDataLoaderIterator",
     "_batch_elements",
     "apply_transformations",
@@ -146,6 +157,7 @@ __all__ = [
     "create_rng",
     "derive_rng",
     "even_split",
+    "experimental",
     "fake_class",
     "get_element_spec",
     "load",

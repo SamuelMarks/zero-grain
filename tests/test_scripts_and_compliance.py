@@ -115,12 +115,25 @@ class _ConvertibleMock:
 
 
 def test_pure_python_fallbacks_without_numpy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify RNG, PyTree batching, and padding when ``numpy`` is absent from ``sys.modules``.
+    """Verify RNG, PyTree batching, and padding with ``zero_jax.numpy`` and pure-Python fallbacks.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
+    from zero_grain._types import JaxArray
+
     monkeypatch.setitem(sys.modules, "numpy", None)
+    jnp_adapter = get_numpy_module()
+    assert jnp_adapter is not None
+    jnp_batched = _batch_elements([1, 2, 3])
+    assert isinstance(jnp_batched, JaxArray)
+    jnp_padded = batch_and_pad([jnp_batched], 2)
+    assert isinstance(jnp_padded, JaxArray) and jnp_padded.shape == (2, 3)
+    assert isinstance(jnp_adapter.asarray([1, 2]), JaxArray)
+    jnp_rng = create_rng(7)
+    assert 0.0 <= jnp_rng.random() < 1.0
+
+    monkeypatch.setitem(sys.modules, "zero_jax.numpy", None)
     assert get_numpy_module() is None
 
     rng = create_rng(11)
@@ -130,6 +143,7 @@ def test_pure_python_fallbacks_without_numpy(monkeypatch: pytest.MonkeyPatch) ->
     assert _batch_elements([[1, 2], [3, 4]]) == [[1, 3], [2, 4]]
     assert batch_and_pad([1], 2) == [1, 0]
     assert batch_and_pad([1.5], 2) == [1.5, 0.0]
+    assert batch_and_pad([True], 2) == [True, False]
     assert batch_and_pad(["a"], 2, pad_value="z") == ["a", "z"]
     assert batch_and_pad([{"k": 1}], 2) == {"k": [1, 0]}
     assert batch_and_pad([[1, 2]], 2) == [[1, 0], [2, 0]]
@@ -195,7 +209,7 @@ def test_tree_and_operations_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None
     Args:
         monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
-    assert map_tree(lambda x: x, (1, 2)) == (1, 2)
+    assert map_tree(lambda x: int(x) + 10 if isinstance(x, int) else x, (1, 2)) == (11, 12)
     assert spec_like(np.zeros((2, 3), dtype=np.int32)) == "int32[2, 3]"
 
     monkeypatch.delitem(sys.modules, "absl.logging", raising=False)
@@ -218,8 +232,9 @@ def test_tree_and_operations_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None
     rec_int: Record[int] = Record(metadata=RecordMetadata(index=2), data=5)
     assert [r.data for r in op_map([rec_int, None])] == [6]
 
-    op_rm: RandomMapOperation[int, int] = RandomMapOperation(lambda x, r: x)
-    assert [r.data for r in op_rm([rec_int, None])] == [5]
+    op_rm: RandomMapOperation[int, int] = RandomMapOperation(lambda x, r: x + r.integers(10, 20))
+    rm_out = [r.data for r in op_rm([rec_int, None])]
+    assert len(rm_out) == 1 and 15 <= rm_out[0] < 25
 
     op_filt: FilterOperation[ElementTree] = FilterOperation(_PositiveFilter())
     assert [r.data for r in op_filt([rec, None])] == [5]
@@ -243,12 +258,13 @@ def test_tree_and_operations_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None
     conv_padded = batch_and_pad([_ConvertibleMock()], 2)
     assert isinstance(conv_padded, (list, np.ndarray))
     assert len(conv_padded) == 2
-    assert map_tree(lambda x: x, {"a": 1}) == {"a": 1}
+    assert map_tree(lambda x: int(x) + 10 if isinstance(x, int) else x, {"a": 1}) == {"a": 11}
 
     filt_norm = normalize_operation(_PositiveFilter())
     assert isinstance(filt_norm, FilterOperation)
-    callable_norm = normalize_operation(lambda x: x)
+    callable_norm = normalize_operation(lambda x: int(x) + 1 if isinstance(x, int) else x)
     assert isinstance(callable_norm, MapOperation)
+    assert callable_norm.apply_element(4) == 5
     batch_op._enable_shared_memory()
     assert batch_op._use_shared_memory is True
     fm_with_transform: FlatMapOperation[ElementTree, ElementTree] = FlatMapOperation(_DuplicateFlatMap())
@@ -280,8 +296,9 @@ def test_dataset_and_dataloader_branches() -> None:
 
     ds = Dataset.range(4)
     filtered_batched: BatchDataset[list[int]] = ds.filter(lambda x: isinstance(x, int) and x % 2 == 0).batch(2)
+    assert len(filtered_batched) == 1
     b0 = filtered_batched[0]
-    assert isinstance(b0, np.ndarray) and b0.tolist() == [0]
+    assert isinstance(b0, np.ndarray) and b0.tolist() == [0, 2]
 
     sliced_iter = ds.slice(slice(1, 3)).to_iter_dataset(read_options=ReadOptions(num_threads=2))
     assert len(sliced_iter.dl.data_source) == 2
@@ -289,13 +306,43 @@ def test_dataset_and_dataloader_branches() -> None:
     cloned_iter = IterDataset(sliced_iter, read_options=ReadOptions(num_threads=4))
     assert cloned_iter.read_options is not None and cloned_iter.read_options.num_threads == 4
 
-    assert len(ds.shuffle()) == 4
-    assert len(ds.random_map(lambda x, rng: x)) == 4
-    assert len(ds.map(MapOperation(lambda x: x))) == 4
-    assert len(ds.map_with_index(MapWithIndexOperation(lambda i, x: x))) == 4
-    assert len(ds.random_map(RandomMapOperation(lambda x, r: x))) == 4
-    assert len(ds.filter(FilterOperation(lambda x: True))) == 4
-    assert len(apply_transformations(ds, [MapOperation(lambda x: x)])) == 4
+    shuffled_unseeded = ds.shuffle()
+    assert len(shuffled_unseeded) == 4
+    assert sorted(int(v) for v in shuffled_unseeded if isinstance(v, int)) == [0, 1, 2, 3]
+
+    rm_ds: Dataset[int] = ds.random_map(
+        lambda x, rng: (int(x) if isinstance(x, int) else 0) + rng.integers(10, 20),
+        seed=5,
+    )
+    assert len(rm_ds) == 4
+    assert all(10 <= val < 24 for val in rm_ds if isinstance(val, int))
+
+    map_op_ds: Dataset[int] = ds.map(MapOperation(lambda x: int(x) + 10 if isinstance(x, int) else x))
+    assert list(map_op_ds) == [10, 11, 12, 13]
+    assert [map_op_ds[i] for i in range(4)] == [10, 11, 12, 13]
+
+    mwi_op_ds: Dataset[int] = ds.map_with_index(
+        MapWithIndexOperation(lambda i, x: i * 10 + (int(x) if isinstance(x, int) else 0))
+    )
+    assert list(mwi_op_ds) == [0, 11, 22, 33]
+
+    rm_op_ds: Dataset[int] = ds.random_map(
+        RandomMapOperation(lambda x, r: (int(x) if isinstance(x, int) else 0) + r.integers(50, 60)),
+        seed=9,
+    )
+    assert len(rm_op_ds) == 4
+    assert all(50 <= val < 64 for val in rm_op_ds if isinstance(val, int))
+
+    filt_op_ds = ds.filter(FilterOperation(lambda x: isinstance(x, int) and x >= 2))
+    assert list(filt_op_ds) == [2, 3]
+    assert filt_op_ds[0] is None
+    assert filt_op_ds[2] == 2
+
+    applied_ds = apply_transformations(
+        ds,
+        [MapOperation(lambda x: int(x) * 3 if isinstance(x, int) else x)],
+    )
+    assert list(applied_ds) == [0, 3, 6, 9]
 
     dl_seq_sampler = DataLoader(
         data_source=InMemoryDataSource([10, 20, 30]),
@@ -317,6 +364,14 @@ def test_dataset_and_dataloader_branches() -> None:
     fm_it.set_state({"version": 2, "last_seen_indices": {"0": 10}, "last_worker_index": 0})
     with pytest.raises(StopIteration):
         next(fm_it)
+
+    fm_dl_workers: DataLoader[int] = DataLoader(
+        data_source=InMemoryDataSource([1, 2, 3, 4]),
+        sampler=SequentialSampler(4),
+        operations=[FlatMapOperation(_DuplicateFlatMap())],
+        worker_count=2,
+    )
+    assert_equal_output_after_checkpoint(fm_dl_workers)
 
     dl_from_load = load(
         InMemoryDataSource([1, 2]),
@@ -405,13 +460,12 @@ def test_testing_trees_equal_and_checkpoint_errors() -> None:
                 state (CheckpointStateDict): Ignored state.
             """
             del state
-            return
 
     class _BadRestoreLoader(DataLoader[int]):
         """Loader returning ``_BadRestoreIterator``."""
 
         def __iter__(self) -> DataLoaderIterator[int]:
-            """Return bad restore iterator.
+            """Return broken iterator.
 
             Returns:
                 DataLoaderIterator[int]: Iterator.
@@ -422,20 +476,24 @@ def test_testing_trees_equal_and_checkpoint_errors() -> None:
         assert_equal_output_after_checkpoint(_BadRestoreLoader(data_source=InMemoryDataSource([1, 2])))
 
     class _NondeterministicIterator(DataLoaderIterator[int]):
-        """Iterator yielding different values after restoration."""
+        """Iterator yielding incrementing values regardless of restored state."""
 
         _global_counter = 0
 
         def __next__(self) -> ElementTree:
-            """Return incrementing counter.
+            """Return incrementing counter for 2 steps.
 
             Returns:
                 ElementTree: Counter value.
+
+            Raises:
+                StopIteration: After 2 elements per instance.
             """
-            val = super().__next__()
+            if self._step_offset >= 2:
+                raise StopIteration
+            self._step_offset += 1
             _NondeterministicIterator._global_counter += 1
-            base = int(val) if isinstance(val, int) else 0
-            return base + _NondeterministicIterator._global_counter
+            return _NondeterministicIterator._global_counter
 
     class _NondeterministicLoader(DataLoader[int]):
         """Loader returning ``_NondeterministicIterator``."""
@@ -459,6 +517,24 @@ def test_scripts_execution(tmp_path: Path) -> None:
         tmp_path (Path): Pytest temporary directory fixture.
     """
     assert calc_compliance.main([]) == 0
+    assert calc_compliance._extract_module_exports(tmp_path / "nonexistent_init.py") == set()
+    sample_init = tmp_path / "sample_init.py"
+    sample_init.write_text(
+        chr(10).join(
+            [
+                "from mod import A, B as C",
+                "def helper_fn() -> None:",
+                "    pass",
+                "class HelperCls:",
+                "    pass",
+                "X = 1",
+                '__all__ = ["A", "C", "X"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert {"A", "C", "helper_fn", "HelperCls", "X"} <= calc_compliance._extract_module_exports(sample_init)
+
     bad_snap = tmp_path / "bad_snap.json"
     bad_snap.write_text('{"categories": {"extras": [{"name": "MissingApi"}]}}', encoding="utf-8")
     assert calc_compliance.main([str(bad_snap)]) == 1
@@ -488,6 +564,131 @@ def test_scripts_execution(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert check_compliance.main([str(good_plan)]) == 0
+    assert check_compliance.main([]) == 0
+    assert check_compliance.main(["--strict-v005"]) == 0
+
+    assert check_compliance._extract_ast_signatures(tmp_path / "nonexistent.py") == ({}, {}, set())
+    assert check_compliance.parse_todo_plan_unchecked(tmp_path / "nonexistent_todo.md") == set()
+    assert check_compliance._collect_codebase_surface(tmp_path / "nonexistent_src") == (
+        {},
+        {},
+        {
+            "grain": set(),
+            "grain.python": set(),
+            "grain.experimental": set(),
+            "grain.python.experimental": set(),
+        },
+    )
+    assert check_compliance.verify_snapshot_v005(snapshot_path=tmp_path / "missing_snap.json")[0] == 0
+
+    fake_src = tmp_path / "fake_src"
+    (fake_src / "python").mkdir(parents=True)
+    (fake_src / "__init__.py").write_text(
+        chr(10).join(
+            [
+                "from .mod import MyCls, AliasCls, top_fn",
+                "__all__ = ['MyCls', 'AliasCls', 'top_fn']",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (fake_src / "python" / "__init__.py").write_text(
+        "from ..mod import MyCls\n__all__ = ['MyCls']\n",
+        encoding="utf-8",
+    )
+    (fake_src / "experimental.py").write_text(
+        "class ExpCls:\n    '''Exp doc.'''\n    def __init__(self, a: int = 1) -> None:\n        '''Init.'''\n",
+        encoding="utf-8",
+    )
+    (fake_src / "python" / "experimental.py").write_text(
+        "from ..experimental import ExpCls\n__all__ = ['ExpCls']\n",
+        encoding="utf-8",
+    )
+    (fake_src / "mod.py").write_text(
+        chr(10).join(
+            [
+                "class MyCls:",
+                "    '''Doc.'''",
+                "    x = 1",
+                "    y: int = 2",
+                "    def __init__(self, pos_only: int, /, reg: int = 1, *args: int, kw: int = 2, **kwargs: int) -> None:",
+                "        '''Init.'''",
+                "    def documented_m(self, val: int) -> int:",
+                "        '''Method doc.'''",
+                "        return val",
+                "    def nodoc_m(self, val: int) -> int:",
+                "        return val",
+                "AliasCls = MyCls",
+                "UnknownAlias = ExternalThing",
+                "NotAlias, OtherTarget = 1, 2",
+                "def top_fn(a: int) -> int:",
+                "    return a",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    custom_snap = tmp_path / "custom_v005.json"
+    custom_snap.write_text(
+        chr(10).join(
+            [
+                "{",
+                '  "categories": {',
+                '    "array": [',
+                '      "not_a_mapping",',
+                '      {"name": "NoApiPath"},',
+                '      {"name": "MyCls", "api_path": "grain.MyCls", "params": ["not_a_dict", {"name": "reg"}]},',
+                '      {"name": "AliasCls", "api_path": "grain.AliasCls", "params": []},',
+                '      {"name": "top_fn", "api_path": "grain.top_fn", "params": [{"name": "missing_p"}]},',
+                '      {"name": "MissingTop", "api_path": "grain.MissingTop", "params": []},',
+                '      {"name": "MyCls.documented_m", "api_path": "grain.MyCls.documented_m", "params": [{"name": "val"}]},',
+                '      {"name": "nodoc_m", "api_path": "grain.MyCls.nodoc_m", "params": [{"name": "missing_m_p"}]},',
+                '      {"name": "MyCls.missing_m", "api_path": "grain.MyCls.missing_m", "params": []},',
+                '      {"name": "ExpCls", "api_path": "grain.experimental.ExpCls", "params": [{"name": "a"}]},',
+                '      {"name": "UnexportedExp", "api_path": "grain.experimental.UnexportedExp", "params": []}',
+                "    ]",
+                "  }",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert check_compliance.main(["--strict-v005", f"--snapshot={custom_snap}"]) == 1
+    (fake_src / "unexp.py").write_text(
+        "class UnexportedExp:\n    '''Doc.'''\n    pass\nclass UnexportedMain:\n    '''Doc.'''\n    pass\n",
+        encoding="utf-8",
+    )
+    custom_snap_2 = tmp_path / "custom_v005_2.json"
+    custom_snap_2.write_text(
+        '{"categories": {"array": [{"name": "UnexportedMain", "api_path": "grain.UnexportedMain", "params": []}, {"name": "UnexportedExp", "api_path": "grain.experimental.UnexportedExp", "params": []}]}}',
+        encoding="utf-8",
+    )
+    c1, t1, v1 = check_compliance.verify_snapshot_v005(
+        snapshot_path=custom_snap,
+        todo_plan_path=None,
+        src_root=fake_src,
+        strict_all=True,
+    )
+    assert t1 == 9 and c1 < t1 and len(v1) >= 5
+    c2, t2, v2 = check_compliance.verify_snapshot_v005(
+        snapshot_path=custom_snap_2,
+        todo_plan_path=None,
+        src_root=fake_src,
+        strict_all=True,
+    )
+    assert t2 == 2 and c2 == 0 and len(v2) == 3
+
+    todo_sample = tmp_path / "TODO_SAMPLE.md"
+    todo_sample.write_text(
+        "- [ ] Implement `zero_grain.UnexportedMain` and `grain.experimental.UnexportedExp`\n- [x] Done `grain.MyCls`\n",
+        encoding="utf-8",
+    )
+    c3, t3, v3 = check_compliance.verify_snapshot_v005(
+        snapshot_path=custom_snap_2,
+        todo_plan_path=todo_sample,
+        src_root=fake_src,
+        strict_all=False,
+    )
+    assert c3 == 2 and t3 == 2 and v3 == []
 
     assert check_deps.main(["src"]) == 0
     assert check_deps.main([str(tmp_path / "missing_dir")]) == 1
@@ -532,6 +733,7 @@ def test_scripts_execution(tmp_path: Path) -> None:
         chr(10).join(
             [
                 '"""Module docstring."""',
+                "import typing",
                 "",
                 "class BadCls:",
                 '    """Docstring for BadCls."""',
@@ -554,6 +756,10 @@ def test_scripts_execution(tmp_path: Path) -> None:
                 "def none_return_fn() -> None:",
                 '    """Return nothing."""',
                 "    return None",
+                "",
+                "def noreturn_attr_fn() -> typing.NoReturn:",
+                '    """Raise error."""',
+                "    raise RuntimeError()",
                 "",
                 "def untyped_return_fn():",
                 '    """Return 1."""',
@@ -581,17 +787,34 @@ def test_scripts_execution(tmp_path: Path) -> None:
         chr(10).join(
             [
                 "from typing import " + "Any, cast",
+                "from typing_extensions import " + "Any as ExtAny",
+                "import builtins",
                 "import typing",
                 "def untyped(a, *args, **kwargs):  #" + " type: ignore",
                 "    a.__name__ = 'hack'",
+                "    d = a.__" + "dict__",
+                "    c = a.__" + "class__",
                 "    x: " + "Any = getattr(a, 'b', None)",
+                "    x2 = builtins." + "getattr(a, 'b', None)",
+                "    fn_ref = builtins." + "setattr",
+                "    t_any = typing." + "Any",
                 "    y = cast(int, x)",
                 "    z = typing.cast(int, y)",
+                "    try:",
+                "        v = vars(a)",
+                "    except:",
+                "        pass",
+                "    try:",
+                "        v2 = d",
+                "    except Exception:",
+                "        pass",
                 "    return z",
             ]
         ),
         encoding="utf-8",
     )
+    violations = check_typing_discipline.check_file_typing(bad_typing_file)
+    assert len(violations) >= 12
     assert check_typing_discipline.main([str(bad_typing_file)]) == 1
 
     assert check_test_completeness.main([]) == 0
@@ -601,16 +824,39 @@ def test_scripts_execution(tmp_path: Path) -> None:
             [
                 "from foo import UntestedClassName",
                 "from bar import _private_helper",
+                '__all__ = ["UntestedClassName", "AnotherMissingSymbol"]',
             ]
         ),
         encoding="utf-8",
     )
-    assert check_test_completeness.main([str(fake_init), "tests"]) == 1
+    fake_tests_dir = tmp_path / "fake_tests"
+    fake_tests_dir.mkdir()
+    fake_test_file = fake_tests_dir / "test_sample.py"
+    fake_test_file.write_text(
+        chr(10).join(
+            [
+                "def helper_without_assert() -> None:",
+                "    UntestedClassName()",
+                "",
+                "class SubCls(BaseSym, mod.AttrBase, GenBase[int], mod.GenAttr[int], make_base()):",
+                "    def test_method(self) -> None:",
+                "        obj.call_method(ArgSym, mod.ArgAttr, kw=KwSym)",
+                "        self.assertEqual(1, 1)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tested_set = check_test_completeness.get_tested_names(fake_tests_dir)
+    assert "UntestedClassName" not in tested_set
+    assert {"BaseSym", "AttrBase", "GenBase", "GenAttr", "ArgSym", "ArgAttr", "KwSym"} <= tested_set
+    assert check_test_completeness.main([str(fake_init), str(fake_tests_dir)]) == 1
 
     assert update_badges.get_color(99.0) == "brightgreen"
     assert update_badges.get_color(85.0) == "green"
     assert update_badges.get_color(65.0) == "yellow"
     assert update_badges.get_color(40.0) == "red"
+    assert update_badges.compute_doc_pct(()) == 100.0
+    assert update_badges.compute_doc_pct((Path("src/zero_grain/record.py"),)) == 100.0
     assert update_badges.update_readme(tmp_path / "missing_readme.md") is False
 
     sample_readme_1 = tmp_path / "README1.md"
@@ -637,9 +883,10 @@ def test_scripts_execution(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    assert update_badges.update_readme(sample_readme_2, api_pct=100.0) is True
+    assert update_badges.update_readme(sample_readme_2, doc_pct=100.0, api_pct=100.0) is True
     assert "api_compliance-100%25" in sample_readme_2.read_text(encoding="utf-8")
 
     sample_readme_3 = tmp_path / "README3.md"
     sample_readme_3.write_text("# Plain Readme", encoding="utf-8")
-    assert update_badges.update_readme(sample_readme_3) is True
+    assert update_badges.update_readme(sample_readme_3, doc_pct=100.0) is True
+    assert sample_readme_3.read_text(encoding="utf-8") == "# Plain Readme"

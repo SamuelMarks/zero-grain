@@ -3,14 +3,44 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from ml_switcheroo_compiler import ops as _compiler_ops
 from zero_grain._types import (
+    _ZERO_JAX_NUMPY_ADAPTER,
     ArrayConvertibleProtocol,
+    CompilerDType,
+    CompilerTensor,
     ElementTree,
+    JaxArray,
+    MappableDataclassProtocol,
     ScalarElement,
+    SharedMemoryMetadataProtocol,
+    ZeroArrayProtocol,
+    dtype_name,
     get_numpy_module,
+    is_dataclass_instance,
+    is_mappable_dataclass_instance,
     is_namedtuple_instance,
     is_ndarray_instance,
 )
+
+
+def _reconstruct_mappable_dataclass(
+    instance: MappableDataclassProtocol,
+    field_names: tuple[str, ...],
+    field_values: tuple[ElementTree, ...],
+) -> ElementTree:
+    """Reconstruct a ``MappableDataclassProtocol`` instance with updated ``field_values``.
+
+    Args:
+        instance (MappableDataclassProtocol): Template dataclass instance.
+        field_names (tuple[str, ...]): Ordered field names.
+        field_values (tuple[ElementTree, ...]): Ordered new field values.
+
+    Returns:
+        ElementTree: Reconstructed ``MappableDataclassProtocol`` instance.
+    """
+    cls = type(instance)
+    return cls(**dict(zip(field_names, field_values)))
 
 
 def _convert_leaf_batch(batch: Sequence[ElementTree]) -> ElementTree:
@@ -20,19 +50,45 @@ def _convert_leaf_batch(batch: Sequence[ElementTree]) -> ElementTree:
         batch (Sequence[ElementTree]): Sequence of leaf elements to stack.
 
     Returns:
-        ElementTree: Stacked NumPy array if NumPy is loaded and compatible, else a list.
+        ElementTree: Stacked NumPy/zero_jax/CompilerTensor/ZeroArray or list.
     """
+    first = batch[0]
+    if isinstance(first, JaxArray):
+        return _ZERO_JAX_NUMPY_ADAPTER.array(batch)
+    if isinstance(first, CompilerTensor):
+        tensors = [item for item in batch if isinstance(item, CompilerTensor)]
+        stacked_tensor = _compiler_ops.stack(tensors)
+        assert isinstance(stacked_tensor, CompilerTensor)
+        return stacked_tensor
+    if isinstance(first, ZeroArrayProtocol):
+        from zero_chex.types import ZeroArray
+
+        flat_data: list[int | float | complex | bool] = [
+            val for item in batch if isinstance(item, ZeroArrayProtocol) for val in item.to_list()
+        ]
+        res_zero: ZeroArrayProtocol = ZeroArray(
+            flat_data,
+            shape=(len(batch), *first.shape),
+            dtype=dtype_name(first.dtype),
+        )
+        return res_zero
     np_mod = get_numpy_module()
     if np_mod is not None:
         try:
             return np_mod.array(batch)
-        except Exception:
+        except (ValueError, TypeError):
             return list(batch)
     return list(batch)
 
 
 def _batch_elements(batch: Sequence[ElementTree]) -> ElementTree:
     """Collate a sequence of structured elements into a single batched PyTree.
+
+    Note:
+        Following Google Grain's ``tree_lib`` PyTree semantics, Python ``list``
+        and ``tuple`` instances are treated as PyTree containers whose positional
+        children are recursively batched across records and (for ``list``) stacked
+        into a NumPy array when NumPy is available.
 
     Args:
         batch (Sequence[ElementTree]): Sequence of elements sharing identical tree structure.
@@ -46,6 +102,33 @@ def _batch_elements(batch: Sequence[ElementTree]) -> ElementTree:
     if not batch:
         return list(batch)
     first = batch[0]
+    if is_mappable_dataclass_instance(first):
+        field_names = first.__chex_mappable_fields__()
+        first_cls = type(first)
+        mismatched_dc_pos: list[int] = []
+        mismatched_dc_vals: list[ElementTree] = []
+        for idx, item in enumerate(batch):
+            if (
+                not is_mappable_dataclass_instance(item)
+                or type(item) is not first_cls
+                or item.__chex_mappable_fields__() != field_names
+            ):
+                mismatched_dc_pos.append(idx)
+                mismatched_dc_vals.append(item)
+        if mismatched_dc_pos:
+            raise TypeError(
+                f"Record structures do not match. Record at position 0 has "
+                f"structure {first}, while records at positions {mismatched_dc_pos} "
+                f"have structures {mismatched_dc_vals}."
+            )
+        batched_dc_values: list[ElementTree] = []
+        for field_idx, _ in enumerate(field_names):
+            col_vals: list[ElementTree] = [
+                item.__chex_field_values__()[field_idx] for item in batch if is_mappable_dataclass_instance(item)
+            ]
+            batched_dc_values.append(_batch_elements(col_vals))
+        return _reconstruct_mappable_dataclass(first, field_names, tuple(batched_dc_values))
+
     if isinstance(first, Mapping):
         first_keys = set(first.keys())
         mismatched_positions: list[int] = []
@@ -113,6 +196,10 @@ def _zero_like_element(element: ElementTree, pad_value: ScalarElement = 0) -> El
     Returns:
         ElementTree: Zero-initialized element matching ``element``.
     """
+    if is_mappable_dataclass_instance(element):
+        field_names = element.__chex_mappable_fields__()
+        zero_vals = tuple(_zero_like_element(v, pad_value) for v in element.__chex_field_values__())
+        return _reconstruct_mappable_dataclass(element, field_names, zero_vals)
     if isinstance(element, Mapping):
         return {k: _zero_like_element(v, pad_value) for k, v in element.items()}
     if is_namedtuple_instance(element):
@@ -123,6 +210,22 @@ def _zero_like_element(element: ElementTree, pad_value: ScalarElement = 0) -> El
     if isinstance(element, list):
         return [_zero_like_element(v, pad_value) for v in element]
 
+    if isinstance(element, JaxArray):
+        return _ZERO_JAX_NUMPY_ADAPTER.zeros_like(element)
+    if isinstance(element, CompilerTensor):
+        target_dt = CompilerDType(dtype_name(element.dtype))
+        zero_tensor = _compiler_ops.zeros_like(element, dtype=target_dt)
+        assert isinstance(zero_tensor, CompilerTensor)
+        return zero_tensor
+    if isinstance(element, ZeroArrayProtocol):
+        from zero_chex.types import ZeroArray
+
+        zero_arr: ZeroArrayProtocol = ZeroArray.zeros(
+            element.shape,
+            dtype=dtype_name(element.dtype),
+        )
+        return zero_arr
+
     np_mod = get_numpy_module()
     if np_mod is not None:
         if is_ndarray_instance(element):
@@ -130,10 +233,12 @@ def _zero_like_element(element: ElementTree, pad_value: ScalarElement = 0) -> El
         if isinstance(element, ArrayConvertibleProtocol):
             arr = element.__array__()
             return np_mod.zeros_like(arr)
-    if isinstance(element, float):
-        return 0.0
+    if isinstance(element, bool):
+        return False
     if isinstance(element, int):
         return 0
+    if isinstance(element, float):
+        return 0.0
     return pad_value
 
 
@@ -163,6 +268,41 @@ def batch_and_pad(
     return _batch_elements(padded_elements)
 
 
+def _leaf_type_spec(leaf: ElementTree) -> str:
+    """Return the structural type specification string for a single PyTree ``leaf``.
+
+    Args:
+        leaf (ElementTree): Leaf element to describe.
+
+    Returns:
+        str: Canonical type or dtype/shape string for ``leaf``.
+    """
+    if is_ndarray_instance(leaf):
+        return f"{dtype_name(leaf.dtype)}{list(leaf.shape)}"
+    if isinstance(leaf, SharedMemoryMetadataProtocol):
+        return f"SharedMemoryArrayMetadata{list(leaf.shape)}"
+    if isinstance(leaf, ArrayConvertibleProtocol):
+        arr = leaf.__array__()
+        return f"{dtype_name(arr.dtype)}{list(arr.shape)}"
+    if leaf is None:
+        return "NoneType"
+    if isinstance(leaf, bool):
+        return "bool"
+    if isinstance(leaf, int):
+        return "int"
+    if isinstance(leaf, float):
+        return "float"
+    if isinstance(leaf, complex):
+        return "complex"
+    if isinstance(leaf, str):
+        return "str"
+    if isinstance(leaf, bytes):
+        return "bytes"
+    if is_dataclass_instance(leaf):
+        return "dataclass"
+    return "unknown"
+
+
 def spec_like(tree: ElementTree) -> ElementTree:
     """Compute a structural type/shape specification matching ``tree``.
 
@@ -172,6 +312,10 @@ def spec_like(tree: ElementTree) -> ElementTree:
     Returns:
         ElementTree: Specification tree with leaf types and shapes.
     """
+    if is_mappable_dataclass_instance(tree):
+        field_names = tree.__chex_mappable_fields__()
+        spec_vals = tuple(spec_like(v) for v in tree.__chex_field_values__())
+        return _reconstruct_mappable_dataclass(tree, field_names, spec_vals)
     if isinstance(tree, Mapping):
         return {k: spec_like(v) for k, v in tree.items()}
     if is_namedtuple_instance(tree):
@@ -181,9 +325,7 @@ def spec_like(tree: ElementTree) -> ElementTree:
         return tuple(spec_like(v) for v in tree)
     if isinstance(tree, list):
         return [spec_like(v) for v in tree]
-    if is_ndarray_instance(tree):
-        return f"{tree.dtype.name}{list(tree.shape)}"
-    return type(tree).__name__
+    return _leaf_type_spec(tree)
 
 
 def map_tree(
@@ -199,6 +341,10 @@ def map_tree(
     Returns:
         ElementTree: Transformed PyTree with identical container hierarchy.
     """
+    if is_mappable_dataclass_instance(tree):
+        field_names = tree.__chex_mappable_fields__()
+        mapped_vals = tuple(map_tree(fn, v) for v in tree.__chex_field_values__())
+        return _reconstruct_mappable_dataclass(tree, field_names, mapped_vals)
     if isinstance(tree, Mapping):
         return {k: map_tree(fn, v) for k, v in tree.items()}
     if is_namedtuple_instance(tree):
@@ -213,6 +359,7 @@ def map_tree(
 
 __all__ = [
     "_batch_elements",
+    "_leaf_type_spec",
     "batch_and_pad",
     "map_tree",
     "spec_like",

@@ -64,6 +64,13 @@ repos:
         types: [python]
         pass_filenames: false
 
+      - id: check-v005-compliance
+        name: Check ml-ecosystem-snapshots v0.0.5 Minimum API & Plan Compliance
+        entry: python3 scripts/check_compliance.py --strict-v005
+        language: system
+        types: [python]
+        pass_filenames: false
+
       - id: pytest-cov
         name: Pytest (100% Line & Branch Coverage)
         entry: pytest --cov=src --cov=scripts --cov-branch --cov-report=term-missing --cov-fail-under=100

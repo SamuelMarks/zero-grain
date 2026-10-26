@@ -51,7 +51,7 @@ def setup_module() -> None:
     """Set up the module for testing."""
     from zero_grain import python as grain  # pylint: disable=g-import-not-at-top
 
-    srcdir = pathlib.Path(grain.__file__).parents[0] / "_src" / "python"
+    srcdir = pathlib.Path(grain.__file__).parents[1] / "_src" / "python"
     FLAGS["test_srcdir"].parse(str(srcdir))
 
 
@@ -373,7 +373,9 @@ class DataLoaderTest(absl_parameterized.TestCase):
         ]
         data_loader = self._create_data_loader_for_short_sequence(transformations, seed=1)
         actual = list(data_loader)
+        actual_second = list(data_loader)
         self.assertLen(actual, 4)
+        np.testing.assert_equal(actual, actual_second)
         for i in range(4):
             item = actual[i]
             assert isinstance(item, np.ndarray)

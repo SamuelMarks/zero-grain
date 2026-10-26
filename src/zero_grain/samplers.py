@@ -8,8 +8,6 @@ from zero_grain._types import ElementTree
 from zero_grain.record import RecordMetadata
 from zero_grain.sharding import NoSharding, ShardOptions, even_split
 
-_DEFAULT_NO_SHARDING = NoSharding(shard_index=0, shard_count=1, drop_remainder=False)
-
 
 class Sampler:
     """Base protocol and class for Grain record samplers."""
@@ -61,7 +59,8 @@ class SequentialSampler(Sampler):
     def __init__(
         self,
         num_records: int = 1,
-        shard_options: ShardOptions | None = _DEFAULT_NO_SHARDING,
+        shard_options: ShardOptions | None = None,
+        num_epochs: int | None = None,
         seed: int | None = None,
     ) -> None:
         """Initialize ``SequentialSampler``.
@@ -69,21 +68,27 @@ class SequentialSampler(Sampler):
         Args:
             num_records (int): Total number of records in the dataset (must be ``> 0``).
             shard_options (ShardOptions | None): Sharding configuration across processes.
+            num_epochs (int | None): Optional number of epochs to iterate (defaults to 1 if None).
             seed (int | None): Optional seed for deterministic RNG attachment.
 
         Raises:
-            ValueError: If ``num_records <= 0``.
+            ValueError: If ``num_records <= 0`` or ``num_epochs <= 0``.
         """
         super().__init__()
         if num_records <= 0:
             raise ValueError(f"num_records must be positive, got {num_records}")
+        if num_epochs is not None and num_epochs <= 0:
+            raise ValueError(f"num_epochs must be positive, got {num_epochs}")
         self.num_records = num_records
         self.shard_options: ShardOptions = shard_options if shard_options is not None else NoSharding()
+        self.num_epochs = num_epochs
         self.seed = seed
+        effective_epochs = num_epochs if num_epochs is not None else 1
+        total_records = num_records * effective_epochs
         if self.shard_options.drop_remainder:
-            self._max_index = (num_records // self.shard_options.shard_count) * self.shard_options.shard_count
+            self._max_index = (total_records // self.shard_options.shard_count) * self.shard_options.shard_count
         else:
-            self._max_index = num_records
+            self._max_index = total_records
 
     def __len__(self) -> int:
         """Return the total number of accessible global indices.
@@ -108,7 +113,7 @@ class SequentialSampler(Sampler):
         if index < 0 or index >= self._max_index:
             raise IndexError(f"RecordMetadata index {index} is out of bounds for size {self._max_index}")
         rng = derive_rng(self.seed, index) if self.seed is not None else None
-        return RecordMetadata(index=index, record_key=index, rng=rng)
+        return RecordMetadata(index=index, record_key=index % self.num_records, rng=rng)
 
     def __iter__(self) -> Iterator[RecordMetadata]:
         """Iterate over ``RecordMetadata`` entries belonging to the active shard.
@@ -137,7 +142,7 @@ class IndexSampler(Sampler):
     def __init__(
         self,
         num_records: int = 1,
-        shard_options: ShardOptions | None = _DEFAULT_NO_SHARDING,
+        shard_options: ShardOptions | None = None,
         shuffle: bool = False,
         num_epochs: int | None = None,
         seed: int | ElementTree | None = None,
@@ -146,7 +151,7 @@ class IndexSampler(Sampler):
 
         Args:
             num_records (int): Number of records in a single epoch (must be ``> 0``).
-            shard_options (ShardOptions | None): Sharding configuration.
+            shard_options (ShardOptions | None): Sharding configuration (defaults to ``NoSharding()``).
             shuffle (bool): Whether to shuffle record keys within each epoch.
             num_epochs (int | None): Optional number of epochs (None for 1 epoch).
             seed (int | ElementTree | None): Integer seed in ``[0, 2**32)`` used for shuffling and RNG derivation.
@@ -178,7 +183,7 @@ class IndexSampler(Sampler):
 
         effective_epochs = num_epochs if num_epochs is not None else 1
         max_index = effective_epochs * num_records
-        if not isinstance(self.shard_options, NoSharding) and self.shard_options.drop_remainder:
+        if self.shard_options.drop_remainder:
             max_index = min(
                 max_index,
                 self._shard_len * self.shard_options.shard_count * effective_epochs,

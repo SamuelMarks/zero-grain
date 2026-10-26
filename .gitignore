@@ -87,3 +87,8 @@ cython_debug/
 *.swo
 *~
 .DS_Store
+snapshots/grain_v0.2.2.json
+src/zero_grain/_src/
+src/zero_grain/python/_src/
+TODO_PLAN.md
+

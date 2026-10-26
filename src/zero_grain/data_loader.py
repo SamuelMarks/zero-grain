@@ -41,8 +41,6 @@ TransformationSpec: TypeAlias = Union[
     Callable[[T_in], T_out],
 ]
 
-_DEFAULT_NO_SHARDING = NoSharding(shard_index=0, shard_count=1, drop_remainder=False)
-
 
 def normalize_operation(
     transform: TransformationSpec[ElementTree, ElementTree],
@@ -111,10 +109,14 @@ class DataLoader(Generic[T_co]):
             ValueError: If ``worker_count < 0``.
         """
         effective_workers = worker_count if worker_count is not None else 0
-        if options is not None and worker_count == 0:
+        if options is not None and not effective_workers:
             effective_workers = options.worker_count
         if effective_workers < 0:
             raise ValueError(f"worker_count must be non-negative, got {effective_workers}")
+
+        effective_read_options = (
+            options.read_options if (read_options is None and options is not None) else read_options
+        )
 
         self.data_source: RandomAccessDataSource[T_co] | Sequence[T_co] = (
             data_source if data_source is not None else InMemoryDataSource([])
@@ -130,7 +132,7 @@ class DataLoader(Generic[T_co]):
         self.worker_count = effective_workers
         self.worker_buffer_size = worker_buffer_size
         self.shard_options = shard_options
-        self.read_options = read_options
+        self.read_options = effective_read_options
         self.enable_profiling = enable_profiling
 
     def __iter__(self) -> DataLoaderIterator[T_co]:
@@ -146,7 +148,7 @@ class DataLoader(Generic[T_co]):
             for op in self.operations:
                 try:
                     pickle.dumps(op)
-                except Exception as exc:
+                except (pickle.PickleError, ValueError, TypeError, AttributeError) as exc:
                     raise ValueError("I shall not be pickled") from exc
         return DataLoaderIterator(self)
 
@@ -340,7 +342,7 @@ class DataLoaderIterator(Generic[T_co]):
         Raises:
             StopIteration: When all worker streams are exhausted.
         """
-        if not self._sampler_records or len(self.data_source) == 0:
+        if not self._sampler_records:
             raise StopIteration
 
         num_w = len(self._workers)
@@ -368,8 +370,12 @@ class DataLoaderIterator(Generic[T_co]):
             CheckpointStateDict: Dictionary suitable for ``set_state`` restoration.
         """
         has_flatmap = any(isinstance(op, FlatMapOperation) for op in self.data_loader.operations)
-        if has_flatmap and self._step_offset > 0:
-            indices: dict[str, int] = {"0": self._step_offset - 1}
+        defaults = self._default_last_seen_indices()
+        if has_flatmap:
+            indices: dict[str, int] = {
+                str(w_idx): (worker._emitted_count - 1 if worker._emitted_count > 0 else defaults.get(str(w_idx), -1))
+                for w_idx, worker in enumerate(self._workers)
+            }
         else:
             indices = {str(w_idx): worker.last_seen_index for w_idx, worker in enumerate(self._workers)}
         return {
@@ -388,7 +394,7 @@ class DataLoaderIterator(Generic[T_co]):
             state (CheckpointStateDict): State dictionary to validate.
 
         Raises:
-            ValueError: If ``worker_count`` in ``state`` does not match ``self.worker_count``.
+            ValueError: If ``worker_count``, ``sampler``, or ``data_source`` in ``state`` mismatches.
         """
         if not self.validate_state:
             return
@@ -396,6 +402,14 @@ class DataLoaderIterator(Generic[T_co]):
             raise ValueError(
                 f"Checkpoint worker_count {state['worker_count']} does not match "
                 f"DataLoader worker_count {self.worker_count}"
+            )
+        state_sampler = state.get("sampler")
+        if state_sampler and state_sampler != repr(self.sampler):
+            raise ValueError(f"Checkpoint sampler {state_sampler} does not match DataLoader sampler {self.sampler!r}")
+        state_source = state.get("data_source")
+        if state_source and state_source != repr(self.data_source):
+            raise ValueError(
+                f"Checkpoint data_source {state_source} does not match DataLoader data_source {self.data_source!r}"
             )
 
     def set_state(self, state: CheckpointStateDict) -> None:
@@ -419,23 +433,28 @@ class DataLoaderIterator(Generic[T_co]):
             return
 
         if has_flatmap:
-            target_step = max_seen + 1
-            self._last_worker_index = last_worker
-            self._next_worker_turn = 0
-            self._step_offset = 0
             self._reset_workers(initial_indices=None)
-            for _ in range(target_step):
-                try:
-                    next(self)
-                except StopIteration:
-                    break
+            total_steps = 0
+            for w_idx, worker in enumerate(self._workers):
+                w_seen = last_indices.get(str(w_idx), -1)
+                w_target = w_seen + 1 if w_seen >= 0 else 0
+                for _ in range(w_target):
+                    try:
+                        worker.next_element()
+                        total_steps += 1
+                    except StopIteration:
+                        break
+            self._last_worker_index = last_worker
+            self._next_worker_turn = (
+                (last_worker + 1) % self.worker_count if (self.worker_count > 0 and last_worker >= 0) else 0
+            )
+            self._step_offset = total_steps
             return
 
         self._last_worker_index = last_worker
-        if self.worker_count > 0:
-            self._next_worker_turn = (last_worker + 1) % self.worker_count if last_worker >= 0 else 0
-        else:
-            self._next_worker_turn = 0
+        self._next_worker_turn = (
+            (last_worker + 1) % self.worker_count if (self.worker_count > 0 and last_worker >= 0) else 0
+        )
         self._step_offset = max_seen + 1
         self._reset_workers(initial_indices=dict(last_indices))
 
@@ -470,55 +489,60 @@ _EagerDataLoaderIterator = DataLoaderIterator
 
 
 def load(
-    source: RandomAccessDataSource[T_co] | Sequence[T_co] | None = None,
+    data_source: RandomAccessDataSource[T_co] | Sequence[T_co] | None = None,
     *,
     num_epochs: int | None = None,
     shuffle: bool = False,
     seed: int | None = None,
-    shard_options: ShardOptions = _DEFAULT_NO_SHARDING,
+    shard_options: ShardOptions | None = None,
     transformations: Sequence[TransformationSpec[ElementTree, ElementTree]] = (),
     batch_size: int | None = None,
     drop_remainder: bool = False,
     worker_count: int | None = 0,
     read_options: ReadOptions | None = None,
     options: LoadOptions | None = None,
+    source: RandomAccessDataSource[T_co] | Sequence[T_co] | None = None,
 ) -> DataLoader[T_co]:
-    """Construct a ``DataLoader`` for ``source``.
+    """Construct a ``DataLoader`` for ``data_source``.
 
     Args:
-        source (RandomAccessDataSource[T_co] | Sequence[T_co] | None):
+        data_source (RandomAccessDataSource[T_co] | Sequence[T_co] | None):
             Input random-access data source or sequence.
         num_epochs (int | None): Number of epochs to iterate.
         shuffle (bool): Whether to shuffle records within each epoch.
         seed (int | None): Seed used when ``shuffle=True``.
-        shard_options (ShardOptions): Sharding configuration.
+        shard_options (ShardOptions | None): Sharding configuration (defaults to ``NoSharding()``).
         transformations (Sequence[TransformationSpec[ElementTree, ElementTree]]): Sequence of transforms to apply.
         batch_size (int | None): Optional batch size to append a ``BatchOperation``.
         drop_remainder (bool): Whether to drop trailing incomplete batches.
         worker_count (int | None): Number of worker processes.
         read_options (ReadOptions | None): Reader threading and buffer options.
         options (LoadOptions | None): Optional legacy ``LoadOptions`` container.
+        source (RandomAccessDataSource[T_co] | Sequence[T_co] | None):
+            Optional legacy keyword alias for ``data_source``.
 
     Returns:
         DataLoader[T_co]: Configured ``DataLoader`` instance.
     """
+    resolved_sharding = shard_options if shard_options is not None else NoSharding()
     if options is not None:
         num_epochs = options.num_epochs if num_epochs is None else num_epochs
         shuffle = options.shuffle or shuffle
         seed = options.seed if seed is None else seed
         batch_size = options.batch_size if batch_size is None else batch_size
         drop_remainder = options.drop_remainder or drop_remainder
-        worker_count = options.worker_count if worker_count == 0 else worker_count
+        worker_count = options.worker_count if not worker_count else worker_count
         read_options = options.read_options if read_options is None else read_options
 
+    chosen_source = data_source if data_source is not None else source
     effective_source: RandomAccessDataSource[T_co] | Sequence[T_co] = (
-        source if source is not None else InMemoryDataSource([])
+        chosen_source if chosen_source is not None else InMemoryDataSource([])
     )
     source_len = len(effective_source)
     sampler: Sampler = (
         IndexSampler(
             num_records=source_len,
-            shard_options=shard_options,
+            shard_options=resolved_sharding,
             shuffle=shuffle,
             num_epochs=num_epochs,
             seed=seed,
@@ -534,7 +558,7 @@ def load(
         sampler=sampler,
         operations=ops_list,
         worker_count=worker_count,
-        shard_options=shard_options,
+        shard_options=resolved_sharding,
         read_options=read_options,
     )
 

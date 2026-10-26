@@ -129,7 +129,8 @@ def test_data_loader_iterator_prefetch_state() -> None:
     assert state2["last_seen_indices"]["0"] == -1
     it2.set_state({"last_seen_indices": {}})
     it2.set_state({"last_seen_indices": {"0": 10}})
-    DataLoaderIterator(dl2, state={"last_seen_indices": {"0": 10}})
+    restored_it = DataLoaderIterator(dl2, state={"last_seen_indices": {"0": 10}})
+    assert list(restored_it) == []
 
 
 def test_checkpoint_handler() -> None:
@@ -182,14 +183,18 @@ def test_options_misc() -> None:
 def test_index_sampler_seed_type() -> None:
     """Verify ``IndexSampler`` seed validation and sharded iteration."""
     with pytest.raises(TypeError):
-        IndexSampler(10, seed="not_an_int")
+        IndexSampler(10, seed=True)
     with pytest.raises(ValueError):
         IndexSampler(10, seed=-1)
     with pytest.raises(ValueError):
         IndexSampler(10, seed=2**32 + 1)
 
-    idx_s = IndexSampler(10, shard_options=NoSharding(0, 2, True))
+    idx_s = IndexSampler(10, shard_options=NoSharding(0, 2, True), num_epochs=1)
+    assert len(idx_s) == 10
     assert len(list(iter(idx_s))) == 5
+    idx_s_uneven = IndexSampler(9, shard_options=NoSharding(0, 2, True), num_epochs=1)
+    assert len(idx_s_uneven) == 8
+    assert len(list(iter(idx_s_uneven))) == 4
 
 
 def test_operations_not_implemented() -> None:
@@ -220,14 +225,14 @@ def test_operations_implemented() -> None:
     op_map_idx: MapWithIndexOperation[int, int] = MapWithIndexOperation(lambda i, x: x + i)
     assert op_map_idx.map_with_index(2, 1) == 3
     rec: Record[int] = Record(RecordMetadata(0, 0), 1)
-    assert len(list(op_map_idx([rec]))) == 1
+    assert [r.data for r in op_map_idx([rec])] == [1]
 
-    op_flat: FlatMapOperation[int, int] = FlatMapOperation(lambda x: [x, x])
-    assert list(op_flat.flat_map(1)) == [1, 1]
+    op_flat: FlatMapOperation[int, int] = FlatMapOperation(lambda x: [x, x + 1])
+    assert list(op_flat.flat_map(1)) == [1, 2]
 
     op_copy = CopyNumPyArrayToSharedMemoryOperation()
     rec_tree: Record[ElementTree] = Record(RecordMetadata(0, 0), 1)
-    assert len(list(op_copy([rec_tree]))) == 1
+    assert [r.data for r in op_copy([rec_tree])] == [1]
 
 
 def test_fake_class() -> None:
@@ -242,15 +247,15 @@ def test_batch_and_pad() -> None:
     """Verify ``batch_and_pad`` with arrays and scalars."""
     res = batch_and_pad([np.array([1]), np.array([2])], batch_size=3)
     assert isinstance(res, np.ndarray)
-    assert len(res) == 3
+    assert res.tolist() == [[1], [2], [0]]
 
     res2 = batch_and_pad([1, 2], batch_size=3)
     assert isinstance(res2, np.ndarray)
-    assert len(res2) == 3
+    assert res2.tolist() == [1, 2, 0]
 
     res3 = batch_and_pad([_batch_elements([1]), _batch_elements([2])], batch_size=3)
     assert isinstance(res3, np.ndarray)
-    assert len(res3) == 3
+    assert res3.tolist() == [[1], [2], [0]]
 
 
 def test_dataset_misc() -> None:
@@ -258,6 +263,7 @@ def test_dataset_misc() -> None:
     ds = Dataset([1, 2, 3])
     ds2 = ds.seed(42)
     assert ds2._seed == 42
+    assert ds._seed is None
 
     ds3 = ds.shuffle(12)
     assert ds3._seed == 12
@@ -268,21 +274,26 @@ def test_dataset_misc() -> None:
     it_ds_iter = iter(it_ds)
     assert next(it_ds_iter) == 1
 
-    res = apply_transformations(ds, MapOperation(lambda x: x))
+    res = apply_transformations(ds, MapOperation(lambda x: int(x) * 2 if isinstance(x, int) else x))
     assert len(res.operations) == 1
+    assert list(res) == [2, 4, 6]
     assert get_element_spec(ds) == "int"
 
-    ds4: Dataset[int] = ds.map(lambda x: x)
+    ds4: Dataset[int] = ds.map(lambda x: int(x) + 10 if isinstance(x, int) else x)
     assert len(ds4.operations) == 1
+    assert list(ds4) == [11, 12, 13]
 
-    ds5: Dataset[int] = ds.map_with_index(lambda i, x: x)
+    ds5: Dataset[int] = ds.map_with_index(lambda i, x: i + (int(x) * 10 if isinstance(x, int) else 0))
     assert len(ds5.operations) == 1
+    assert list(ds5) == [10, 21, 32]
 
-    ds6 = ds.filter(lambda x: bool(x))
+    ds6 = ds.filter(lambda x: isinstance(x, int) and x >= 2)
     assert len(ds6.operations) == 1
+    assert list(ds6) == [2, 3]
 
-    ds7: Dataset[list[ElementTree]] = ds.batch(1, batch_fn=lambda xs: list(xs))
+    ds7: Dataset[list[ElementTree]] = ds.batch(2, batch_fn=lambda xs: list(xs))
     assert len(ds7.operations) == 1
+    assert list(ds7) == [[1, 2], [3]]
 
     rng = Dataset.range(10)
     assert len(rng) == 10
@@ -309,7 +320,9 @@ def test_misc_classes() -> None:
     """Verify ``DatasetSelectionMap``, ``PyGrainDatasetIterator``, and ``load``."""
     sel_map = DatasetSelectionMap()
     assert len(sel_map) == 0
-    PyGrainDatasetIterator()
+    empty_it: PyGrainDatasetIterator[int] = PyGrainDatasetIterator()
+    with pytest.raises(StopIteration):
+        next(empty_it)
     dl = load([1, 2], batch_size=2)
     assert dl.worker_count == 0
 
@@ -319,19 +332,19 @@ def test_operations_with_none() -> None:
     op_batch: BatchOperation[int] = BatchOperation(batch_size=2)
     assert list(op_batch([None])) == []
 
-    op_map_idx: MapWithIndexOperation[int, int] = MapWithIndexOperation(lambda i, x: x)
+    op_map_idx: MapWithIndexOperation[int, int] = MapWithIndexOperation(lambda i, x: i + x)
     assert list(op_map_idx([None])) == []
 
-    op_map: MapOperation[int, int] = MapOperation(lambda x: x)
+    op_map: MapOperation[int, int] = MapOperation(lambda x: x + 1)
     assert list(op_map([None])) == []
 
-    op_rmap: RandomMapOperation[int, int] = RandomMapOperation(lambda x, rng: x)
+    op_rmap: RandomMapOperation[int, int] = RandomMapOperation(lambda x, rng: x + rng.integers(1, 10))
     assert list(op_rmap([None])) == []
 
-    op_filter: FilterOperation[int] = FilterOperation(lambda x: True)
+    op_filter: FilterOperation[int] = FilterOperation(lambda x: x > 0)
     assert list(op_filter([None])) == []
 
-    op_flat: FlatMapOperation[int, int] = FlatMapOperation(lambda x: [x])
+    op_flat: FlatMapOperation[int, int] = FlatMapOperation(lambda x: [x, x + 1])
     assert list(op_flat([None])) == []
 
     op_copy = CopyNumPyArrayToSharedMemoryOperation()

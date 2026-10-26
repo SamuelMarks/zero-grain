@@ -7,7 +7,21 @@ from typing import Generic
 from zero_grain._types import ElementTree, RNGGeneratorProtocol, T_in, T_out
 
 
-class MapTransform(Generic[T_in, T_out]):
+class Transformation:
+    """Abstract base class for all Grain dataset and data-loader transformations."""
+
+    def __init__(self, *args: ElementTree, **kwargs: ElementTree) -> None:
+        """Initialize ``Transformation``.
+
+        Args:
+            *args (ElementTree): Positional arguments.
+            **kwargs (ElementTree): Keyword arguments.
+        """
+        self._args = args
+        self._kwargs = kwargs
+
+
+class MapTransform(Transformation, Generic[T_in, T_out]):
     """Base class for deterministic element-wise map transformations."""
 
     def __init__(self, *args: ElementTree, **kwargs: ElementTree) -> None:
@@ -17,8 +31,7 @@ class MapTransform(Generic[T_in, T_out]):
             *args (ElementTree): Positional arguments.
             **kwargs (ElementTree): Keyword arguments.
         """
-        self._args = args
-        self._kwargs = kwargs
+        super().__init__(*args, **kwargs)
 
     def map(self, element: T_in) -> T_out:
         """Transform a single input ``element``.
@@ -35,7 +48,7 @@ class MapTransform(Generic[T_in, T_out]):
         raise NotImplementedError("Subclasses of MapTransform must implement map()")
 
 
-class MapWithIndex(Generic[T_in, T_out]):
+class MapWithIndex(Transformation, Generic[T_in, T_out]):
     """Base class for deterministic element-wise transformations receiving record indices."""
 
     def __init__(self, *args: ElementTree, **kwargs: ElementTree) -> None:
@@ -45,8 +58,7 @@ class MapWithIndex(Generic[T_in, T_out]):
             *args (ElementTree): Positional arguments.
             **kwargs (ElementTree): Keyword arguments.
         """
-        self._args = args
-        self._kwargs = kwargs
+        super().__init__(*args, **kwargs)
 
     def map_with_index(self, index: int, element: T_in) -> T_out:
         """Transform ``element`` along with its sequential ``index``.
@@ -67,7 +79,7 @@ class MapWithIndex(Generic[T_in, T_out]):
 MapWithIndexTransform = MapWithIndex
 
 
-class RandomMapTransform(Generic[T_in, T_out]):
+class RandomMapTransform(Transformation, Generic[T_in, T_out]):
     """Base class for stochastic element-wise transformations using a per-record RNG."""
 
     def __init__(self, *args: ElementTree, **kwargs: ElementTree) -> None:
@@ -77,8 +89,7 @@ class RandomMapTransform(Generic[T_in, T_out]):
             *args (ElementTree): Positional arguments.
             **kwargs (ElementTree): Keyword arguments.
         """
-        self._args = args
-        self._kwargs = kwargs
+        super().__init__(*args, **kwargs)
 
     def random_map(self, element: T_in, rng: RNGGeneratorProtocol) -> T_out:
         """Transform ``element`` using the provided deterministic ``rng``.
@@ -100,7 +111,7 @@ class TfRandomMapTransform(RandomMapTransform[T_in, T_out]):
     """Alias subclass for TensorFlow-style random map transformations."""
 
 
-class Filter(Generic[T_in]):
+class Filter(Transformation, Generic[T_in]):
     """Base class for predicate filter transformations."""
 
     def __init__(self, *args: ElementTree, **kwargs: ElementTree) -> None:
@@ -110,8 +121,7 @@ class Filter(Generic[T_in]):
             *args (ElementTree): Positional arguments.
             **kwargs (ElementTree): Keyword arguments.
         """
-        self._args = args
-        self._kwargs = kwargs
+        super().__init__(*args, **kwargs)
 
     def filter(self, element: T_in) -> bool:
         """Return True if ``element`` should be kept in the dataset stream.
@@ -131,7 +141,7 @@ class Filter(Generic[T_in]):
 FilterTransform = Filter
 
 
-class FlatMapTransform(Generic[T_in, T_out]):
+class FlatMapTransform(Transformation, Generic[T_in, T_out]):
     """Base class for transformations splitting one element into zero or more elements.
 
     Attributes:
@@ -147,8 +157,7 @@ class FlatMapTransform(Generic[T_in, T_out]):
             *args (ElementTree): Positional arguments.
             **kwargs (ElementTree): Keyword arguments.
         """
-        self._args = args
-        self._kwargs = kwargs
+        super().__init__(*args, **kwargs)
 
     def flat_map(self, element: T_in) -> Iterable[T_out]:
         """Split ``element`` into an iterable of output elements.
@@ -165,7 +174,7 @@ class FlatMapTransform(Generic[T_in, T_out]):
         raise NotImplementedError("Subclasses of FlatMapTransform must implement flat_map()")
 
 
-class Batch(Generic[T_in, T_out]):
+class Batch(Transformation, Generic[T_in, T_out]):
     """Transformation specification that batches consecutive elements together.
 
     Attributes:
@@ -190,6 +199,7 @@ class Batch(Generic[T_in, T_out]):
         Raises:
             ValueError: If ``batch_size <= 0``.
         """
+        super().__init__()
         if batch_size <= 0:
             raise ValueError(f"batch_size must be positive, got {batch_size}")
         self.batch_size = batch_size
@@ -219,4 +229,5 @@ __all__ = [
     "RandomMapTransform",
     "TfRandomMap",
     "TfRandomMapTransform",
+    "Transformation",
 ]

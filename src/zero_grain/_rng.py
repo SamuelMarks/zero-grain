@@ -7,9 +7,11 @@ import dataclasses
 import functools
 import math
 import random
+from zero_flax.nnx.rnglib import Rngs as FlaxRngs
 from zero_grain._types import (
     ArrayProtocol,
     RNGGeneratorProtocol,
+    array_to_list,
     get_numpy_module,
 )
 
@@ -198,39 +200,88 @@ class DeterministicGenerator(RNGGeneratorProtocol):
         return f"Generator({self._algorithm_name})"
 
 
-def create_rng(seed: int | None = None) -> RNGGeneratorProtocol:
+def _extract_array_seed(key_arr: ArrayProtocol) -> int:
+    """Extract a deterministic 32-bit integer seed from an ``ArrayProtocol`` PRNG key.
+
+    Args:
+        key_arr (ArrayProtocol): PRNG key array (such as ``zero_jax.random.PRNGKey``).
+
+    Returns:
+        int: Extracted integer seed.
+    """
+    raw = array_to_list(key_arr)
+    assert isinstance(raw, list)
+    if len(raw) == 2 and raw[0] == 0 and isinstance(raw[1], int):
+        return int(raw[1])
+    acc = 0
+    for item in raw:
+        acc = ((acc * 1_000_003) ^ (int(item) if isinstance(item, int) else 0)) & 0xFFFFFFFF
+    return acc
+
+
+def _resolve_seed_int(
+    seed: int | ArrayProtocol | FlaxRngs | None,
+) -> int | None:
+    """Resolve an ``int``, ``PRNGKey`` array, or ``zero_flax.nnx.Rngs`` into an integer seed.
+
+    Args:
+        seed (int | ArrayProtocol | FlaxRngs | None): Seed value or PRNG key source.
+
+    Returns:
+        int | None: Resolved integer seed, or None if ``seed`` is None.
+    """
+    if seed is None:
+        return None
+    if isinstance(seed, int):
+        return seed
+    if isinstance(seed, FlaxRngs):
+        return _extract_array_seed(seed())
+    return _extract_array_seed(seed)
+
+
+def create_rng(
+    seed: int | ArrayProtocol | FlaxRngs | None = None,
+) -> RNGGeneratorProtocol:
     """Create a deterministic RNG using NumPy when loaded or pure Python otherwise.
 
     Args:
-        seed (int | None): Optional integer seed.
+        seed (int | ArrayProtocol | FlaxRngs | None): Optional integer seed, PRNGKey, or Rngs.
 
     Returns:
         RNGGeneratorProtocol: Deterministic random number generator instance.
     """
+    resolved_seed = _resolve_seed_int(seed)
     np_mod = get_numpy_module()
     if np_mod is not None:
-        return np_mod.random.default_rng(seed)
-    return DeterministicGenerator(seed=seed)
+        return np_mod.random.default_rng(resolved_seed)
+    return DeterministicGenerator(seed=resolved_seed)
 
 
-def derive_rng(base_seed: int | None, index: int, op_seed: int = 0) -> DeterministicGenerator:
+def derive_rng(
+    base_seed: int | ArrayProtocol | FlaxRngs | None,
+    index: int,
+    op_seed: int = 0,
+) -> DeterministicGenerator:
     """Derive a per-record deterministic RNG from ``base_seed``, ``index``, and ``op_seed``.
 
     Args:
-        base_seed (int | None): Base pipeline seed (defaults to 0 when None).
+        base_seed (int | ArrayProtocol | FlaxRngs | JaxArrayLikeSpec | None): Base seed, PRNGKey, or Rngs.
         index (int): Global record index.
         op_seed (int): Operation-level seed offset.
 
     Returns:
         DeterministicGenerator: Independent deterministic RNG for the given record.
     """
-    effective_base = 0 if base_seed is None else base_seed
+    resolved_base = _resolve_seed_int(base_seed)
+    effective_base = 0 if resolved_base is None else resolved_base
     combined_seed = (effective_base * 1_000_003 + index * 9_999_991 + op_seed) & 0xFFFFFFFF
     return DeterministicGenerator(seed=combined_seed, algorithm_name="Philox")
 
 
 __all__ = [
     "DeterministicGenerator",
+    "_extract_array_seed",
+    "_resolve_seed_int",
     "create_rng",
     "derive_rng",
     "index_shuffle",

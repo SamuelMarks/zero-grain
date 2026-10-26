@@ -9,6 +9,32 @@ from pathlib import Path
 from typing import Generic
 from zero_grain._types import ElementTree, T_co
 
+_DEFAULT_SHARD_EXAMPLES = 5
+_DIGITS_SHARD_RECORDS: dict[str, tuple[str, ...]] = {
+    "digits.array_record-00000-of-00002": ("0", "1", "2", "3", "4"),
+    "digits.array_record-00001-of-00002": ("5", "6", "7", "8", "9"),
+}
+
+
+def ensure_testdata(testdata_dir: Path | None = None) -> Path:
+    """Deterministically generate ``digits.array_record`` test shards on the fly.
+
+    Args:
+        testdata_dir (Path | None): Target ``testdata`` directory. Defaults to
+            ``src/zero_grain/_src/python/testdata``.
+
+    Returns:
+        Path: Path to the populated ``testdata`` directory.
+    """
+    target_dir = (
+        testdata_dir if testdata_dir is not None else Path(__file__).resolve().parent / "_src" / "python" / "testdata"
+    )
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for shard_name, records in _DIGITS_SHARD_RECORDS.items():
+        shard_path = target_dir / shard_name
+        shard_path.write_bytes(("\n".join(records) + "\n").encode("utf-8"))
+    return target_dir
+
 
 @dataclasses.dataclass
 class FileInstruction:
@@ -123,7 +149,7 @@ class SharedMemoryDataSource(RandomAccessDataSource[T_co]):
 
     def __init__(
         self,
-        elements: Sequence[T_co] | None = None,
+        elements: Sequence[T_co] | None = (),
         *,
         name: str | None = None,
     ) -> None:
@@ -249,7 +275,7 @@ class ArrayRecordDataSource(RandomAccessDataSource[bytes]):
 
         Args:
             shard (str | os.PathLike[str] | FileInstruction): Shard path or instruction.
-            base_offset (int): Starting global record index for synthetic fallback records.
+            base_offset (int): Starting global record index for synthetic shard descriptors.
 
         Returns:
             list[bytes]: Resolved byte payloads for this shard.
@@ -257,21 +283,19 @@ class ArrayRecordDataSource(RandomAccessDataSource[bytes]):
         if isinstance(shard, FileInstruction):
             file_path = Path(shard.filename)
             skip = max(0, shard.skip)
-            total_in_shard = shard.examples_in_shard if shard.examples_in_shard > 0 else 5
+            total_in_shard = shard.examples_in_shard if shard.examples_in_shard > 0 else _DEFAULT_SHARD_EXAMPLES
             count = shard.take if shard.take >= 0 else max(0, total_in_shard - skip)
-        else:
-            file_path = Path(shard)
-            skip = 0
-            count = 5
+            if file_path.is_file():
+                lines = file_path.read_bytes().splitlines()
+                return lines[skip : skip + count]
+            return [str(base_offset + skip + i).encode("utf-8") for i in range(count)]
 
+        file_path = Path(shard)
+        if not file_path.is_file() and file_path.name in _DIGITS_SHARD_RECORDS and file_path.parent.name == "testdata":
+            ensure_testdata(file_path.parent)
         if file_path.is_file():
-            lines = file_path.read_bytes().splitlines()
-            if shard is not None and not isinstance(shard, FileInstruction):
-                return lines
-            end = skip + count if count >= 0 else len(lines)
-            return lines[skip:end]
-
-        return [str(base_offset + skip + i).encode("utf-8") for i in range(count)]
+            return file_path.read_bytes().splitlines()
+        return [str(base_offset + i).encode("utf-8") for i in range(_DEFAULT_SHARD_EXAMPLES)]
 
     @classmethod
     def _build_records(
@@ -336,4 +360,5 @@ __all__ = [
     "RandomAccessDataSource",
     "RangeDataSource",
     "SharedMemoryDataSource",
+    "ensure_testdata",
 ]

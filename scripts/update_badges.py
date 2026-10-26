@@ -9,7 +9,7 @@ import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import calc_compliance  # noqa: E402
+from scripts import calc_compliance, check_docstrings  # noqa: E402
 
 
 def get_color(pct: float) -> str:
@@ -62,10 +62,31 @@ def format_badge_block(
     )
 
 
+def compute_doc_pct(targets: Sequence[Path] = (Path("src"), Path("scripts"), Path("tests"))) -> float:
+    """Compute documentation compliance percentage across ``targets``.
+
+    Args:
+        targets (Sequence[Path]): Directories or files to inspect.
+
+    Returns:
+        float: Percentage of files with zero docstring violations.
+    """
+    files: list[Path] = []
+    for target in targets:
+        if target.is_file():
+            files.append(target)
+        else:
+            files.extend(sorted(target.rglob("*.py")))
+    if not files:
+        return 100.0
+    clean = sum(1 for py_file in files if not check_docstrings.check_file_docstrings(py_file))
+    return (clean / len(files)) * 100.0
+
+
 def update_readme(
     readme_path: Path = Path("README.md"),
     test_pct: float = 100.0,
-    doc_pct: float = 100.0,
+    doc_pct: float | None = None,
     api_pct: float | None = None,
 ) -> bool:
     """Update the coverage and compliance badges in ``readme_path``.
@@ -73,7 +94,7 @@ def update_readme(
     Args:
         readme_path (Path): Path to ``README.md``.
         test_pct (float): Test coverage percentage.
-        doc_pct (float): Documentation coverage percentage.
+        doc_pct (float | None): Documentation coverage percentage (computed dynamically if None).
         api_pct (float | None): API compliance percentage (computed dynamically if None).
 
     Returns:
@@ -82,6 +103,7 @@ def update_readme(
     if not readme_path.exists():
         return False
 
+    effective_doc_pct = compute_doc_pct() if doc_pct is None else doc_pct
     if api_pct is None:
         total, covered, _ = calc_compliance.compute_compliance()
         effective_api_pct = (covered / total * 100.0) if total > 0 else 100.0
@@ -89,7 +111,11 @@ def update_readme(
         effective_api_pct = api_pct
 
     content = readme_path.read_text(encoding="utf-8")
-    badges = format_badge_block(test_pct=test_pct, doc_pct=doc_pct, api_pct=effective_api_pct)
+    badges = format_badge_block(
+        test_pct=test_pct,
+        doc_pct=effective_doc_pct,
+        api_pct=effective_api_pct,
+    )
     lines = badges.splitlines()
 
     content = re.sub(

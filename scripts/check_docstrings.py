@@ -68,6 +68,8 @@ def _is_non_none_return(annotation: ast.expr | None) -> bool:
         return False
     if isinstance(annotation, ast.Constant) and annotation.value in (None, "None", "NoReturn"):
         return False
+    if isinstance(annotation, ast.Attribute) and annotation.attr in ("None", "NoReturn"):
+        return False
     return not (isinstance(annotation, ast.Name) and annotation.id in ("None", "NoReturn"))
 
 
@@ -143,7 +145,8 @@ def check_file_docstrings(filepath: Path) -> list[str]:
 
             if node.name != "__init__" and _is_non_none_return(node.returns) and not _RETURNS_SECTION_RE.search(fn_doc):
                 violations.append(
-                    f"{filepath}:{node.lineno}: Function '{node.name}' has non-None return annotation but is missing 'Returns:' or 'Yields:' section"
+                    f"{filepath}:{node.lineno}: Function '{node.name}' has non-None return annotation "
+                    "but is missing 'Returns:' or 'Yields:' section"
                 )
 
     return violations

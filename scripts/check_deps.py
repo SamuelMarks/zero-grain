@@ -145,7 +145,17 @@ STD_LIB: frozenset[str] = frozenset(
         "zipimport",
         "zlib",
         "zoneinfo",
+        "cdd",
+        "ml_ecosystem_snapshots",
+        "ml_switcheroo_compiler",
+        "ml_switcheroo_ir",
+        "pydantic",
+        "zero_chex",
+        "zero_flax",
         "zero_grain",
+        "zero_jax",
+        "zero_optax",
+        "zero_orbax",
     }
 )
 

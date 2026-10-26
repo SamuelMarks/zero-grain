@@ -7,14 +7,27 @@ from zero_grain._types import (
     CheckpointStateDict,
     ElementTree,
     T_co,
+    array_to_list,
     is_ndarray_instance,
 )
 from zero_grain.data_loader import DataLoader, DataLoaderIterator
 from zero_grain.dataset import DatasetIterator, DatasetSelectionMap, IterDataset
 
 
+def _to_chex_pytree(values: list[ElementTree]) -> list[str]:
+    """Convert a sequence of ``ElementTree`` outputs into a ``zero_chex``-compatible list.
+
+    Args:
+        values (list[ElementTree]): Sequence of dataset output elements.
+
+    Returns:
+        list[str]: Normalized list of element representations for ``zero_chex`` tree assertions.
+    """
+    return [repr(v) for v in values]
+
+
 def _trees_equal(left: ElementTree, right: ElementTree) -> bool:
-    """Recursively compare two PyTrees (including NumPy arrays) for exact equality.
+    """Compare two PyTrees for structural and leaf value equality.
 
     Args:
         left (ElementTree): First PyTree to compare.
@@ -24,7 +37,7 @@ def _trees_equal(left: ElementTree, right: ElementTree) -> bool:
         bool: True if both trees have identical structure and leaf values.
     """
     if is_ndarray_instance(left) and is_ndarray_instance(right):
-        return left.shape == right.shape and left.tolist() == right.tolist()
+        return left.shape == right.shape and array_to_list(left) == array_to_list(right)
     if isinstance(left, list) and isinstance(right, list):
         if len(left) != len(right):
             return False
@@ -128,6 +141,12 @@ def assert_equal_output_after_checkpoint(
                 f"Restored values mismatch at step {step} for state {state}. "
                 f"Expected: {expected_slice}, Actual: {new_values}"
             )
+        import zero_chex
+
+        norm_new = _to_chex_pytree(new_values)
+        norm_expected = _to_chex_pytree(expected_slice)
+        zero_chex.assert_trees_all_equal_structs(norm_new, norm_expected)
+        zero_chex.assert_trees_all_equal(norm_new, norm_expected)
 
 
 def fake_class(*args: ElementTree, **kwargs: ElementTree) -> type[DatasetSelectionMap]:

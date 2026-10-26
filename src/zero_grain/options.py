@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import sys
-from zero_grain._types import AbslLoggingModuleProtocol, ElementTree
+from zero_grain._types import AbslLoggingModuleProtocol
 
 
 @dataclasses.dataclass
@@ -64,52 +64,48 @@ class MultiprocessingOptions:
             raise ValueError("per_worker_buffer_size must be at least 1")
 
 
+@dataclasses.dataclass
 class DatasetOptions:
     """Execution options for ``MapDataset`` and ``IterDataset`` pipelines.
 
     Attributes:
-        filter_warn_threshold_ratio (float): Ratio of filtered elements triggering a warning.
-        filter_raise_threshold_ratio (float): Ratio of filtered elements triggering an error.
+        filter_warn_threshold_ratio (float | None): Ratio of filtered elements triggering a warning in ``[0.0, 1.0]``.
+        filter_raise_threshold_ratio (float | None): Ratio of filtered elements triggering an error in ``[0.0, 1.0]``.
     """
 
-    def __init__(
-        self,
-        filter_warn_threshold_ratio: float = 0.9,
-        filter_raise_threshold_ratio: float = 1.0,
-    ) -> None:
-        """Initialize ``DatasetOptions``.
+    filter_warn_threshold_ratio: float | None = 0.9
+    filter_raise_threshold_ratio: float | None = 1.0
 
-        Args:
-            filter_warn_threshold_ratio (float): Warning threshold ratio for filtered records.
-            filter_raise_threshold_ratio (float): Exception threshold ratio for filtered records.
+    def __post_init__(self) -> None:
+        """Validate filter warning and error threshold ratios.
+
+        Raises:
+            ValueError: If a specified ratio is outside ``[0.0, 1.0]``.
         """
-        self.filter_warn_threshold_ratio = filter_warn_threshold_ratio
-        self.filter_raise_threshold_ratio = filter_raise_threshold_ratio
+        if self.filter_warn_threshold_ratio is not None and not (0.0 <= self.filter_warn_threshold_ratio <= 1.0):
+            raise ValueError(
+                f"filter_warn_threshold_ratio must be in [0.0, 1.0], got {self.filter_warn_threshold_ratio}"
+            )
+        if self.filter_raise_threshold_ratio is not None and not (0.0 <= self.filter_raise_threshold_ratio <= 1.0):
+            raise ValueError(
+                f"filter_raise_threshold_ratio must be in [0.0, 1.0], got {self.filter_raise_threshold_ratio}"
+            )
 
 
+@dataclasses.dataclass
 class DataLoaderOptions:
-    """Legacy configuration container for ``DataLoader`` initialization.
+    """Configuration container for ``DataLoader`` initialization.
 
     Attributes:
         worker_count (int): Number of worker processes.
-        read_options (ReadOptions): Reader threading options.
+        read_options (ReadOptions | None): Reader threading options.
     """
 
-    def __init__(
-        self,
-        worker_count: int = 0,
-        read_options: ReadOptions | None = None,
-    ) -> None:
-        """Initialize ``DataLoaderOptions``.
-
-        Args:
-            worker_count (int): Number of worker processes.
-            read_options (ReadOptions | None): Optional ``ReadOptions`` instance.
-        """
-        self.worker_count = worker_count
-        self.read_options = read_options if read_options is not None else ReadOptions()
+    worker_count: int = 0
+    read_options: ReadOptions | None = None
 
 
+@dataclasses.dataclass
 class LoadOptions:
     """Configuration options for the ``load`` convenience function.
 
@@ -123,34 +119,13 @@ class LoadOptions:
         read_options (ReadOptions | None): Reader threading options.
     """
 
-    def __init__(
-        self,
-        num_epochs: int | None = None,
-        shuffle: bool = False,
-        seed: int | None = None,
-        batch_size: int | None = None,
-        drop_remainder: bool = False,
-        worker_count: int | None = 0,
-        read_options: ReadOptions | None = None,
-    ) -> None:
-        """Initialize ``LoadOptions``.
-
-        Args:
-            num_epochs (int | None): Number of epochs to repeat.
-            shuffle (bool): Whether to shuffle records each epoch.
-            seed (int | None): Optional integer seed.
-            batch_size (int | None): Optional batch size.
-            drop_remainder (bool): Whether to drop partial trailing batches.
-            worker_count (int | None): Number of workers.
-            read_options (ReadOptions | None): Optional ``ReadOptions``.
-        """
-        self.num_epochs = num_epochs
-        self.shuffle = shuffle
-        self.seed = seed
-        self.batch_size = batch_size
-        self.drop_remainder = drop_remainder
-        self.worker_count = worker_count
-        self.read_options = read_options
+    num_epochs: int | None = None
+    shuffle: bool = False
+    seed: int | None = None
+    batch_size: int | None = None
+    drop_remainder: bool = False
+    worker_count: int | None = 0
+    read_options: ReadOptions | None = None
 
 
 __all__ = [
@@ -159,5 +134,4 @@ __all__ = [
     "LoadOptions",
     "MultiprocessingOptions",
     "ReadOptions",
-    "ElementTree",
 ]

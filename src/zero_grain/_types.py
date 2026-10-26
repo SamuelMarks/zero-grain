@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 import dataclasses
 import sys
-from typing import Generic, Protocol, TypedDict, TypeVar, Union, runtime_checkable
+from types import ModuleType
+from typing import Protocol, TypedDict, TypeVar, Union, runtime_checkable
+from ml_switcheroo_compiler import ops as _compiler_ops
+from ml_switcheroo_compiler.core.dtype import DType as CompilerDType
+from ml_switcheroo_compiler.core.tensor import Tensor as CompilerTensor
 from typing_extensions import TypeAlias, TypeGuard
+from zero_jax._types import ArrayLikeSpec as JaxArrayLikeSpec
+from zero_jax.numpy import ndarray as JaxArray
 
 ScalarElement: TypeAlias = Union[int, float, bool, str, bytes, complex, None]
+_INITIAL_NUMPY_MODULE: ModuleType | None = sys.modules.get("numpy")
 
 
 @runtime_checkable
@@ -38,6 +45,11 @@ class DTypeProtocol(Protocol):
             str: Data type name.
         """
 
+
+@runtime_checkable
+class ObjectDTypeProtocol(DTypeProtocol, Protocol):
+    """Protocol representing a NumPy-like data type exposing ``hasobject``."""
+
     @property
     def hasobject(self) -> bool:
         """Return True if the data type contains Python objects.
@@ -45,6 +57,32 @@ class DTypeProtocol(Protocol):
         Returns:
             bool: Whether the dtype holds Python object references.
         """
+
+
+DTypeSpec: TypeAlias = Union[
+    DTypeProtocol,
+    JaxArrayLikeSpec,
+    str,
+    type[int],
+    type[float],
+    type[complex],
+    type[bool],
+    None,
+]
+
+
+def dtype_name(dtype: DTypeSpec) -> str:
+    """Resolve a ``DTypeSpec`` descriptor, string, or Python scalar type into a canonical dtype name.
+
+    Args:
+        dtype (DTypeSpec): Data type object, string, scalar type, or None.
+
+    Returns:
+        str: Canonical dtype name string.
+    """
+    if isinstance(dtype, DTypeProtocol):
+        return dtype.name
+    return str(dtype or "float64")
 
 
 @runtime_checkable
@@ -62,7 +100,7 @@ class ArrayFlagsProtocol(Protocol):
 
 @runtime_checkable
 class ArrayProtocol(Protocol):
-    """Protocol representing a multidimensional array (such as numpy.ndarray)."""
+    """Protocol representing a multidimensional array across NumPy, zero-jax, ZeroArray, and CompilerTensor."""
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -73,12 +111,25 @@ class ArrayProtocol(Protocol):
         """
 
     @property
-    def dtype(self) -> DTypeProtocol:
+    def ndim(self) -> int:
+        """Return the number of array dimensions.
+
+        Returns:
+            int: Number of dimensions.
+        """
+
+    @property
+    def dtype(self) -> DTypeSpec:
         """Return the array data type descriptor.
 
         Returns:
-            DTypeProtocol: Data type object.
+            DTypeSpec: Data type object, string, or scalar type.
         """
+
+
+@runtime_checkable
+class FlaggedArrayProtocol(ArrayProtocol, Protocol):
+    """Protocol representing a multidimensional array exposing memory layout ``flags``."""
 
     @property
     def flags(self) -> ArrayFlagsProtocol:
@@ -88,35 +139,67 @@ class ArrayProtocol(Protocol):
             ArrayFlagsProtocol: Memory layout flags.
         """
 
-    def __len__(self) -> int:
-        """Return the size of the leading dimension.
 
-        Returns:
-            int: Length of the first dimension.
-        """
-
-    def __getitem__(self, index: int) -> int | float | ArrayProtocol:
-        """Return the element or sub-array at ``index``.
-
-        Args:
-            index (int): Positional index.
-
-        Returns:
-            int | float | ArrayProtocol: Indexed element or slice.
-        """
-
-    def __iter__(self) -> Iterator[int]:
-        """Iterate over the leading dimension.
-
-        Returns:
-            Iterator[int]: Iterator over elements.
-        """
+@runtime_checkable
+class ToListArrayProtocol(Protocol):
+    """Protocol representing an array exposing a ``tolist()`` conversion method."""
 
     def tolist(self) -> list[ScalarElement] | ScalarElement:
         """Convert the array into nested Python lists or a scalar.
 
         Returns:
             list[ScalarElement] | ScalarElement: Python representation.
+        """
+
+
+@runtime_checkable
+class ZeroArrayProtocol(ArrayProtocol, Protocol):
+    """Protocol representing a ``zero_chex.types.ZeroArray`` exposing ``to_list()``."""
+
+    def to_list(self) -> list[int | float | complex | bool]:
+        """Return a flat list of scalar elements in the array.
+
+        Returns:
+            list[int | float | complex | bool]: Flat scalar values.
+        """
+
+
+@runtime_checkable
+class DataclassProtocol(Protocol):
+    """Protocol for dataclass instances."""
+
+    @property
+    def __dataclass_fields__(self) -> dict[str, dataclasses.Field[ScalarElement]]:
+        """Return the mapping of dataclass field definitions.
+
+        Returns:
+            dict[str, dataclasses.Field[ScalarElement]]: Dataclass fields mapping.
+        """
+
+
+@runtime_checkable
+class MappableDataclassProtocol(Protocol):
+    """Protocol for ``zero_chex.dataclass`` instances registered with mappable access."""
+
+    def __init__(self, **kwargs: ElementTree) -> None:
+        """Initialize the mappable dataclass from field keyword arguments.
+
+        Args:
+            **kwargs (ElementTree): Field names and values.
+        """
+
+    def __chex_mappable_fields__(self) -> tuple[str, ...]:
+        """Return the ordered tuple of field names in the dataclass.
+
+        Returns:
+            tuple[str, ...]: Ordered field names.
+        """
+
+    def __chex_field_values__(self) -> tuple[ElementTree, ...]:
+        """Return the ordered tuple of field values in the dataclass.
+
+        Returns:
+            tuple[ElementTree, ...]: Ordered field values.
         """
 
 
@@ -164,19 +247,6 @@ class NamedTupleProtocol(Protocol):
 
         Returns:
             ElementTree: Value at ``index``.
-        """
-
-
-@runtime_checkable
-class DataclassProtocol(Protocol):
-    """Protocol for dataclass instances."""
-
-    @property
-    def __dataclass_fields__(self) -> Mapping[str, dataclasses.Field[ScalarElement]]:
-        """Return the mapping of dataclass field definitions.
-
-        Returns:
-            Mapping[str, dataclasses.Field[ScalarElement]]: Dataclass fields mapping.
         """
 
 
@@ -241,29 +311,29 @@ class NumpyRandomModuleProtocol(Protocol):
 
 @runtime_checkable
 class NumpyModuleProtocol(Protocol):
-    """Protocol representing the ``numpy`` module when loaded in ``sys.modules``."""
+    """Protocol representing ``numpy`` or ``zero_jax.numpy`` array creation functions."""
 
     ndarray: type[ArrayProtocol]
     random: NumpyRandomModuleProtocol
 
     def array(self, obj: Sequence[ElementTree] | ElementTree) -> ArrayProtocol:
-        """Create a NumPy array from ``obj``.
+        """Create an array from ``obj``.
 
         Args:
             obj (Sequence[ElementTree] | ElementTree): Input sequence or value.
 
         Returns:
-            ArrayProtocol: Constructed NumPy array.
+            ArrayProtocol: Constructed array.
         """
 
     def asarray(self, obj: Sequence[ElementTree] | ElementTree) -> ArrayProtocol:
-        """Convert ``obj`` to a NumPy array.
+        """Convert ``obj`` to an array.
 
         Args:
             obj (Sequence[ElementTree] | ElementTree): Input sequence or value.
 
         Returns:
-            ArrayProtocol: Constructed NumPy array.
+            ArrayProtocol: Constructed array.
         """
 
     def zeros_like(self, a: ArrayProtocol) -> ArrayProtocol:
@@ -275,6 +345,97 @@ class NumpyModuleProtocol(Protocol):
         Returns:
             ArrayProtocol: Zero-filled array.
         """
+
+
+class _ZeroJaxRandomAdapter:
+    """Adapter providing ``default_rng`` for ``_ZeroJaxNumpyAdapter``."""
+
+    def default_rng(self, seed: int | None = None) -> RNGGeneratorProtocol:
+        """Construct a ``DeterministicGenerator`` seeded with ``seed``.
+
+        Args:
+            seed (int | None): Optional integer seed.
+
+        Returns:
+            RNGGeneratorProtocol: Deterministic random generator.
+        """
+        from zero_grain._rng import DeterministicGenerator
+
+        return DeterministicGenerator(seed=seed)
+
+
+class _ZeroJaxNumpyAdapter:
+    """Adapter wrapping ``zero_jax.numpy`` to satisfy ``NumpyModuleProtocol`` with dtype preservation."""
+
+    ndarray: type[ArrayProtocol] = JaxArray
+    random: NumpyRandomModuleProtocol = _ZeroJaxRandomAdapter()
+
+    def array(self, obj: Sequence[ElementTree] | ElementTree) -> JaxArray:
+        """Create a ``zero_jax`` array from ``obj``.
+
+        Args:
+            obj (Sequence[ElementTree] | ElementTree): Input sequence or value.
+
+        Returns:
+            JaxArray: Constructed ``zero_jax`` array.
+        """
+        snapshot = dict(sys.modules)
+        if sys.modules.get("numpy") is None and _INITIAL_NUMPY_MODULE is not None:
+            sys.modules["numpy"] = _INITIAL_NUMPY_MODULE
+        try:
+            if isinstance(obj, Sequence) and len(obj) > 0 and isinstance(obj[0], JaxArray):
+                tensors = [item._tensor for item in obj if isinstance(item, JaxArray)]
+                stacked = _compiler_ops.stack(tensors)
+                assert isinstance(stacked, CompilerTensor)
+                return JaxArray(stacked)
+            raw_list = (
+                [int(x) if isinstance(x, int) else float(x) for x in obj if isinstance(x, (int, float, bool))]
+                if isinstance(obj, Sequence) and not isinstance(obj, (str, bytes))
+                else (obj if isinstance(obj, (int, float, bool)) else 0)
+            )
+            created = _compiler_ops.array(raw_list)
+            assert isinstance(created, CompilerTensor)
+            return JaxArray(created)
+        finally:
+            if sys.modules.get("numpy") is not snapshot.get("numpy"):
+                sys.modules.clear()
+                sys.modules.update(snapshot)
+
+    def asarray(self, obj: Sequence[ElementTree] | ElementTree) -> JaxArray:
+        """Convert ``obj`` into a ``zero_jax`` array.
+
+        Args:
+            obj (Sequence[ElementTree] | ElementTree): Input sequence or value.
+
+        Returns:
+            JaxArray: Constructed ``zero_jax`` array.
+        """
+        return self.array(obj)
+
+    def zeros_like(self, a: ArrayProtocol) -> JaxArray:
+        """Return a zero-filled ``zero_jax`` array preserving ``a.shape`` and ``a.dtype``.
+
+        Args:
+            a (ArrayProtocol): Reference array.
+
+        Returns:
+            JaxArray: Zero-filled ``zero_jax`` array.
+        """
+        snapshot = dict(sys.modules)
+        if sys.modules.get("numpy") is None and _INITIAL_NUMPY_MODULE is not None:
+            sys.modules["numpy"] = _INITIAL_NUMPY_MODULE
+        try:
+            target_dt = CompilerDType(dtype_name(a.dtype))
+            zeros_t = _compiler_ops.zeros(a.shape, dtype=target_dt)
+            assert isinstance(zeros_t, CompilerTensor)
+            return JaxArray(zeros_t)
+        finally:
+            if sys.modules.get("numpy") is not snapshot.get("numpy"):
+                sys.modules.clear()
+                sys.modules.update(snapshot)
+
+
+_ZERO_JAX_NUMPY_ADAPTER: NumpyModuleProtocol = _ZeroJaxNumpyAdapter()
 
 
 @runtime_checkable
@@ -304,8 +465,12 @@ class CheckpointStateDict(TypedDict, total=False):
 ElementTree: TypeAlias = Union[
     ScalarElement,
     ArrayProtocol,
+    JaxArray,
+    ZeroArrayProtocol,
+    CompilerTensor,
     ArrayConvertibleProtocol,
     SharedMemoryMetadataProtocol,
+    MappableDataclassProtocol,
     DataclassProtocol,
     NamedTupleProtocol,
     Sequence["ElementTree"],
@@ -319,15 +484,57 @@ T_out = TypeVar("T_out", bound=ElementTree)
 
 
 def get_numpy_module() -> NumpyModuleProtocol | None:
-    """Return the loaded ``numpy`` module if present in ``sys.modules``.
+    """Return the loaded ``numpy`` module if in ``sys.modules``, falling back to ``zero_jax.numpy``.
 
     Returns:
-        NumpyModuleProtocol | None: Loaded NumPy module or None.
+        NumpyModuleProtocol | None: Loaded NumPy module, ``zero_jax.numpy`` adapter, or None.
     """
     mod = sys.modules.get("numpy")
     if isinstance(mod, NumpyModuleProtocol):
         return mod
-    return None
+    jnp_mod = sys.modules.get("zero_jax.numpy")
+    if jnp_mod is None and "zero_jax.numpy" in sys.modules:
+        return None
+    return _ZERO_JAX_NUMPY_ADAPTER
+
+
+def array_to_list(arr: ArrayProtocol) -> list[ScalarElement] | ScalarElement:
+    """Convert any ``ArrayProtocol`` instance into nested Python lists or a scalar.
+
+    Args:
+        arr (ArrayProtocol): Array instance to convert.
+
+    Returns:
+        list[ScalarElement] | ScalarElement: Nested list or scalar representation.
+    """
+    if isinstance(arr, ToListArrayProtocol):
+        return arr.tolist()
+    assert isinstance(arr, ZeroArrayProtocol)
+    return [x for x in arr.to_list()]
+
+
+def is_dataclass_instance(value: ElementTree) -> TypeGuard[DataclassProtocol]:
+    """Check whether ``value`` is a dataclass instance (and not a dataclass type).
+
+    Args:
+        value (ElementTree): Candidate value to inspect.
+
+    Returns:
+        TypeGuard[DataclassProtocol]: True if ``value`` is an initialized dataclass instance.
+    """
+    return dataclasses.is_dataclass(value) and not isinstance(value, type)
+
+
+def is_mappable_dataclass_instance(value: ElementTree) -> TypeGuard[MappableDataclassProtocol]:
+    """Check whether ``value`` is a ``zero_chex`` ``MappableDataclassProtocol`` instance.
+
+    Args:
+        value (ElementTree): Candidate value to inspect.
+
+    Returns:
+        TypeGuard[MappableDataclassProtocol]: True if ``value`` implements ``MappableDataclassProtocol``.
+    """
+    return isinstance(value, MappableDataclassProtocol) and not isinstance(value, type)
 
 
 def is_namedtuple_instance(value: ElementTree) -> TypeGuard[NamedTupleProtocol]:
@@ -360,26 +567,35 @@ __all__ = [
     "ArrayFlagsProtocol",
     "ArrayProtocol",
     "CheckpointStateDict",
+    "CompilerDType",
+    "CompilerTensor",
     "DTypeProtocol",
+    "DTypeSpec",
     "DataclassProtocol",
     "ElementTree",
+    "FlaggedArrayProtocol",
+    "JaxArray",
+    "JaxArrayLikeSpec",
+    "MappableDataclassProtocol",
     "NamedTupleProtocol",
     "NumpyModuleProtocol",
     "NumpyRandomModuleProtocol",
+    "ObjectDTypeProtocol",
     "RNGGeneratorProtocol",
     "ScalarElement",
     "SharedMemoryMetadataProtocol",
+    "SliceProtocol",
     "T",
     "T_co",
     "T_in",
     "T_out",
+    "ToListArrayProtocol",
+    "ZeroArrayProtocol",
+    "array_to_list",
+    "dtype_name",
     "get_numpy_module",
+    "is_dataclass_instance",
+    "is_mappable_dataclass_instance",
     "is_namedtuple_instance",
     "is_ndarray_instance",
-    "Callable",
-    "Generic",
-    "Iterable",
-    "Iterator",
-    "Mapping",
-    "Sequence",
 ]

@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import dataclasses
+import zero_jax
 
 
 @dataclasses.dataclass
 class ShardOptions:
-    """Configuration specifying data sharding across workers or hosts.
+    """Configuration specifying how a dataset is partitioned across shards.
 
     Attributes:
-        shard_index (int): Zero-based index of the current shard.
-        shard_count (int): Total number of shards across all processes.
-        drop_remainder (bool): Whether to drop trailing records not evenly divisible.
+        shard_index (int): Zero-based index of the current shard in ``[0, shard_count)``.
+        shard_count (int): Total number of shards (must be ``>= 1``).
+        drop_remainder (bool): Whether to drop trailing records that do not divide evenly.
     """
 
     shard_index: int = 0
@@ -20,31 +21,41 @@ class ShardOptions:
     drop_remainder: bool = False
 
     def __post_init__(self) -> None:
-        """Validate ``shard_index`` and ``shard_count`` after initialization.
+        """Validate ``shard_index`` and ``shard_count`` bounds.
 
         Raises:
             ValueError: If ``shard_index < 0``, ``shard_count <= 0``, or ``shard_index >= shard_count``.
         """
-        if self.shard_count <= 0 or self.shard_index < 0 or self.shard_index >= self.shard_count:
+        if self.shard_index < 0 or self.shard_count <= 0 or self.shard_index >= self.shard_count:
             raise ValueError(
-                f"Invalid shard_index={self.shard_index} and shard_count={self.shard_count}. "
-                f"Must satisfy 0 <= shard_index < shard_count."
+                f"Invalid shard_index={self.shard_index} or shard_count={self.shard_count}. "
+                "Require 0 <= shard_index < shard_count."
             )
 
-    def __repr__(self) -> str:
-        """Return the canonical string representation of the shard options.
+    def _repr_name(self) -> str:
+        """Return the class display name for ``__repr__``.
 
         Returns:
-            str: Formatted ShardOptions string.
+            str: Class name string.
+        """
+        return "ShardOptions"
+
+    def __repr__(self) -> str:
+        """Return the canonical string representation of this sharding option.
+
+        Returns:
+            str: Formatted representation matching Grain output.
         """
         return (
-            f"{self.__class__.__name__}(shard_index={self.shard_index}, "
-            f"shard_count={self.shard_count}, drop_remainder={self.drop_remainder})"
+            f"{self._repr_name()}("
+            f"shard_index={self.shard_index}, "
+            f"shard_count={self.shard_count}, "
+            f"drop_remainder={self.drop_remainder})"
         )
 
 
 class NoSharding(ShardOptions):
-    """Default ``ShardOptions`` subclass representing a single unsharded process."""
+    """Sharding configuration representing a single unpartitioned shard."""
 
     def __init__(
         self,
@@ -52,12 +63,12 @@ class NoSharding(ShardOptions):
         shard_count: int = 1,
         drop_remainder: bool = False,
     ) -> None:
-        """Initialize ``NoSharding`` with single-process defaults.
+        """Initialize ``NoSharding`` options.
 
         Args:
-            shard_index (int): Zero-based shard index (defaults to 0).
+            shard_index (int): Shard index (defaults to 0).
             shard_count (int): Total shard count (defaults to 1).
-            drop_remainder (bool): Drop remainder flag (defaults to False).
+            drop_remainder (bool): Whether to drop uneven remainder records.
         """
         super().__init__(
             shard_index=shard_index,
@@ -65,41 +76,58 @@ class NoSharding(ShardOptions):
             drop_remainder=drop_remainder,
         )
 
+    def _repr_name(self) -> str:
+        """Return the class display name for ``__repr__``.
+
+        Returns:
+            str: Class name string.
+        """
+        return "NoSharding"
+
 
 class ShardByJaxProcess(ShardOptions):
-    """``ShardOptions`` subclass that shards records across JAX processes."""
+    """Sharding configuration partitioning records across active ``zero_jax`` / ``zero_chex`` processes."""
 
     def __init__(self, drop_remainder: bool = False) -> None:
-        """Initialize ``ShardByJaxProcess`` for the local process.
+        """Initialize ``ShardByJaxProcess`` from active ``zero_jax`` process or ``zero_chex`` device counts.
 
         Args:
             drop_remainder (bool): Whether to drop trailing records not divisible by process count.
         """
+        from zero_chex.mocks import get_num_devices_available
+
+        proc_idx = zero_jax.process_index()
+        proc_cnt = max(zero_jax.process_count(), get_num_devices_available("cpu"))
         super().__init__(
-            shard_index=0,
-            shard_count=1,
+            shard_index=proc_idx,
+            shard_count=proc_cnt,
             drop_remainder=drop_remainder,
         )
 
+    def _repr_name(self) -> str:
+        """Return the class display name for ``__repr__``.
 
-def even_split(num_records: int, options: ShardOptions) -> tuple[int, int]:
-    """Compute the ``(start, end)`` record key interval for ``options.shard_index``.
+        Returns:
+            str: Class name string.
+        """
+        return "ShardByJaxProcess"
+
+
+def even_split(num_examples: int, options: ShardOptions) -> tuple[int, int]:
+    """Compute the ``(start, end)`` half-open interval for ``options.shard_index``.
 
     Args:
-        num_records (int): Total number of records in a single epoch.
+        num_examples (int): Total number of examples in the unsharded dataset.
         options (ShardOptions): Sharding configuration.
 
     Returns:
-        tuple[int, int]: Inclusive start key and exclusive end key for the shard.
+        tuple[int, int]: ``(start_index, end_index)`` interval for the current shard.
     """
+    quotient, remainder = divmod(num_examples, options.shard_count)
     if options.drop_remainder:
-        records_per_shard = num_records // options.shard_count
-        start = options.shard_index * records_per_shard
-        end = start + records_per_shard
+        start = options.shard_index * quotient
+        end = start + quotient
         return start, end
-
-    quotient = num_records // options.shard_count
-    remainder = num_records % options.shard_count
     start = options.shard_index * quotient + min(options.shard_index, remainder)
     end = start + quotient + (1 if options.shard_index < remainder else 0)
     return start, end

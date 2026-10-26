@@ -8,13 +8,15 @@ from zero_grain._rng import create_rng, derive_rng
 from zero_grain._tree import _batch_elements, map_tree
 from zero_grain._types import (
     ElementTree,
+    FlaggedArrayProtocol,
+    ObjectDTypeProtocol,
     RNGGeneratorProtocol,
     T_in,
     T_out,
     is_ndarray_instance,
 )
 from zero_grain.record import Record, RecordMetadata
-from zero_grain.shared_memory_array import SharedMemoryArrayMetadata
+from zero_grain.shared_memory_array import SharedMemoryArray
 from zero_grain.transforms import (
     FilterTransform,
     FlatMapTransform,
@@ -22,8 +24,6 @@ from zero_grain.transforms import (
     MapWithIndexTransform,
     RandomMapTransform,
 )
-
-_SHM_COUNTER = 0
 
 
 class Operation(Generic[T_in, T_out]):
@@ -233,6 +233,8 @@ class RandomMapOperation(Operation[T_in, T_out]):
 
     def __init__(
         self,
+        map_function: (Callable[[T_in, RNGGeneratorProtocol], T_out] | RandomMapTransform[T_in, T_out] | None) = None,
+        *,
         random_map_function: (
             Callable[[T_in, RNGGeneratorProtocol], T_out] | RandomMapTransform[T_in, T_out] | None
         ) = None,
@@ -240,11 +242,15 @@ class RandomMapOperation(Operation[T_in, T_out]):
         """Initialize ``RandomMapOperation``.
 
         Args:
-            random_map_function (Callable[[T_in, RNGGeneratorProtocol], T_out] | RandomMapTransform[T_in, T_out] | None):
+            map_function (Callable[[T_in, RNGGeneratorProtocol], T_out] | RandomMapTransform[T_in, T_out] | None):
                 Stochastic transformation function or ``RandomMapTransform`` instance.
+            random_map_function (Callable[[T_in, RNGGeneratorProtocol], T_out] | RandomMapTransform[T_in, T_out] | None):
+                Legacy keyword alias for ``map_function``.
         """
         super().__init__()
-        self.random_map_function = random_map_function
+        resolved = map_function if map_function is not None else random_map_function
+        self.map_function = resolved
+        self.random_map_function = resolved
 
     def random_map(self, element: T_in, rng: RNGGeneratorProtocol) -> T_out:
         """Apply the random transformation to ``element`` with ``rng``.
@@ -444,16 +450,12 @@ def _convert_leaf_to_shm(leaf: ElementTree) -> ElementTree:
     Returns:
         ElementTree: ``SharedMemoryArrayMetadata`` if eligible, else the original ``leaf``.
     """
-    global _SHM_COUNTER
     if is_ndarray_instance(leaf):
-        if leaf.dtype.hasobject or not leaf.flags.c_contiguous:
+        if isinstance(leaf.dtype, ObjectDTypeProtocol) and leaf.dtype.hasobject:
             return leaf
-        _SHM_COUNTER += 1
-        return SharedMemoryArrayMetadata(
-            name=f"shm_{_SHM_COUNTER}",
-            dtype=leaf.dtype,
-            shape=leaf.shape,
-        )
+        if isinstance(leaf, FlaggedArrayProtocol) and not leaf.flags.c_contiguous:
+            return leaf
+        return SharedMemoryArray.from_array(leaf)
     return leaf
 
 
