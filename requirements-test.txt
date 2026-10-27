@@ -10,3 +10,8 @@ numpy
 ml-switcheroo-ir @ https://github.com/SamuelMarks/ml-switcheroo-ir/releases/download/v0.0.4/ml_switcheroo_ir-0.0.4-py3-none-any.whl
 ml-switcheroo-compiler @ https://github.com/SamuelMarks/ml-switcheroo-compiler/releases/download/v0.0.1/ml_switcheroo_compiler-0.0.1-py3-none-any.whl
 ml-ecosystem-snapshots @ https://github.com/SamuelMarks/ml-ecosystem-snapshots/releases/download/v0.0.5/ml_ecosystem_snapshots-0.0.5-py3-none-any.whl
+zero-jax @ git+https://github.com/SamuelMarks/zero-jax.git@master
+zero-chex @ git+https://github.com/SamuelMarks/zero-chex.git@master
+zero-flax @ git+https://github.com/SamuelMarks/zero-flax.git@master
+zero-optax @ git+https://github.com/SamuelMarks/zero-optax.git@master
+zero-orbax @ git+https://github.com/SamuelMarks/zero-orbax.git@master

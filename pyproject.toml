@@ -132,6 +132,7 @@ module = [
     "zero_orbax.*",
 ]
 follow_imports = "silent"
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
@@ -139,6 +140,7 @@ module = [
     "parameterized.*",
     "numpy",
     "pytest",
+    "ml_ecosystem_snapshots",
     "ml_ecosystem_snapshots.*",
 ]
 ignore_missing_imports = true

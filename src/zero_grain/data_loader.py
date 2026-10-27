@@ -60,6 +60,7 @@ def normalize_operation(
             batch_size=transform.batch_size,
             drop_remainder=transform.drop_remainder,
             batch_fn=transform.batch_fn,
+            as_jax_array=transform.as_jax_array,
         )
     if isinstance(transform, MapTransform):
         return MapOperation(map_function=transform)

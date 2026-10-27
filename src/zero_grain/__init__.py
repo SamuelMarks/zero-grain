@@ -2,22 +2,9 @@
 
 from __future__ import annotations
 
-from zero_grain import experimental, shared_memory_array, sharding, transforms, python
+from zero_grain import shared_memory_array, transforms
 from zero_grain._rng import DeterministicGenerator, create_rng, derive_rng
 from zero_grain._tree import _batch_elements, batch_and_pad, map_tree, spec_like
-from zero_grain.checkpoint import (
-    CheckpointHandler,
-    PyGrainCheckpointHandler,
-    PyGrainCheckpointRestore,
-    PyGrainCheckpointSave,
-)
-from zero_grain.data_loader import (
-    DataLoader,
-    DataLoaderIterator,
-    PyGrainDatasetIterator,
-    _EagerDataLoaderIterator,
-    load,
-)
 from zero_grain.data_sources import (
     ArrayRecordDataSource,
     FileInstruction,
@@ -25,18 +12,6 @@ from zero_grain.data_sources import (
     RandomAccessDataSource,
     RangeDataSource,
     SharedMemoryDataSource,
-)
-from zero_grain.dataset import (
-    BatchDataset,
-    Dataset,
-    DatasetIterator,
-    DatasetSelectionMap,
-    FilterDataset,
-    IterDataset,
-    MapDataset,
-    SelectionWithReplacementMap,
-    apply_transformations,
-    get_element_spec,
 )
 from zero_grain.operations import (
     BatchOperation,
@@ -57,18 +32,10 @@ from zero_grain.options import (
     ReadOptions,
 )
 from zero_grain.record import Record, RecordMetadata
-from zero_grain.samplers import IndexSampler, Sampler, SequentialSampler
-from zero_grain.sharding import (
-    NoSharding,
-    ShardByJaxProcess,
-    ShardOptions,
-    even_split,
-)
 from zero_grain.shared_memory_array import (
     SharedMemoryArray,
     SharedMemoryArrayMetadata,
 )
-from zero_grain.testing import assert_equal_output_after_checkpoint, fake_class
 from zero_grain.transforms import (
     Batch,
     BatchTransform,
@@ -86,6 +53,47 @@ from zero_grain.transforms import (
     TfRandomMapTransform,
     Transformation,
 )
+from zero_grain import sharding
+from zero_grain.sharding import (
+    NoSharding,
+    ShardByJaxProcess,
+    ShardOptions,
+    even_split,
+    put_batch_on_sharding,
+)
+from zero_grain.samplers import IndexSampler, Sampler, SequentialSampler
+from zero_grain.data_loader import (
+    DataLoader,
+    DataLoaderIterator,
+    PyGrainDatasetIterator,
+    _EagerDataLoaderIterator,
+    load,
+)
+from zero_grain.dataset import (
+    BatchDataset,
+    Dataset,
+    DatasetIterator,
+    DatasetSelectionMap,
+    FilterDataset,
+    IterDataset,
+    MapDataset,
+    MixedIterDataset,
+    MixedMapDataset,
+    SelectionWithReplacementMap,
+    apply_transformations,
+    get_element_spec,
+)
+from zero_grain import experimental
+from zero_grain.testing import assert_equal_output_after_checkpoint, fake_class
+from zero_grain.checkpoint import (
+    CheckpointHandler,
+    PyGrainCheckpointHandler,
+    PyGrainCheckpointRestore,
+    PyGrainCheckpointSave,
+    register_with_orbax,
+    validate_restored_state,
+)
+from zero_grain import python
 
 __all__ = [
     "ArrayRecordDataSource",
@@ -123,6 +131,8 @@ __all__ = [
     "MapWithIndex",
     "MapWithIndexOperation",
     "MapWithIndexTransform",
+    "MixedIterDataset",
+    "MixedMapDataset",
     "MultiprocessingOptions",
     "NoSharding",
     "Operation",
@@ -162,9 +172,12 @@ __all__ = [
     "get_element_spec",
     "load",
     "map_tree",
+    "put_batch_on_sharding",
     "python",
+    "register_with_orbax",
     "sharding",
     "shared_memory_array",
     "spec_like",
     "transforms",
+    "validate_restored_state",
 ]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import dataclasses
 import sys
 from typing import Protocol, TypedDict, TypeVar, Union, runtime_checkable
@@ -10,8 +10,18 @@ from ml_switcheroo_compiler.core.device import Device as CompilerDevice
 from ml_switcheroo_compiler.core.dtype import DType as CompilerDType
 from ml_switcheroo_compiler.core.tensor import Tensor as CompilerTensor, TensorConfig as CompilerTensorConfig
 from typing_extensions import TypeAlias, TypeGuard
+from zero_flax.core import FrozenDict
+from zero_flax.nnx import (
+    RngStream as FlaxRngStream,
+    Rngs as FlaxRngs,
+    State as FlaxState,
+    Variable as FlaxVariable,
+)
+from zero_flax.nnx.variables import VariableBase as FlaxVariableBase
+from zero_flax.types import ArrayProtocol as FlaxArrayProtocol
 from zero_jax._types import ArrayLikeSpec as JaxArrayLikeSpec
 from zero_jax.numpy import ndarray as JaxArray
+import zero_jax
 
 ScalarElement: TypeAlias = Union[int, float, bool, str, bytes, complex, None]
 NestedNumericList: TypeAlias = Union[int, float, bool, complex, list["NestedNumericList"]]
@@ -519,8 +529,40 @@ class _ZeroJaxNumpyAdapter:
         zeros_payload = _make_zero_nested_list(a.shape, zero_scalar)
         return JaxArray(CompilerTensor(zeros_payload, CompilerTensorConfig(a.shape, target_dt, CompilerDevice("cpu"))))
 
+    def stack(self, arrays: Sequence[JaxArray], axis: int = 0) -> JaxArray:
+        """Stack ``arrays`` along ``axis`` using ``zero_jax.numpy.stack``.
 
-_ZERO_JAX_NUMPY_ADAPTER: NumpyModuleProtocol = _ZeroJaxNumpyAdapter()
+        Args:
+            arrays (Sequence[JaxArray]): Sequence of ``JaxArray`` instances with matching shapes.
+            axis (int): Axis along which to stack.
+
+        Returns:
+            JaxArray: Stacked ``zero_jax.numpy.ndarray``.
+        """
+        res = zero_jax.numpy.stack(list(arrays), axis=axis)
+        return res if isinstance(res, JaxArray) else self.array(list(arrays))
+
+    def pad(
+        self,
+        array: JaxArray,
+        pad_width: tuple[tuple[int, int], ...],
+        constant_values: int | float | bool = 0,
+    ) -> JaxArray:
+        """Pad ``array`` using ``zero_jax.numpy.pad``.
+
+        Args:
+            array (JaxArray): Input ``JaxArray`` to pad.
+            pad_width (tuple[tuple[int, int], ...]): Per-axis ``(before, after)`` padding widths.
+            constant_values (int | float | bool): Constant fill value.
+
+        Returns:
+            JaxArray: Padded ``zero_jax.numpy.ndarray``.
+        """
+        res = zero_jax.numpy.pad(array, pad_width, mode="constant", constant_values=constant_values)
+        return res if isinstance(res, JaxArray) else array
+
+
+_ZERO_JAX_NUMPY_ADAPTER: _ZeroJaxNumpyAdapter = _ZeroJaxNumpyAdapter()
 
 
 @runtime_checkable
@@ -550,6 +592,7 @@ class CheckpointStateDict(TypedDict, total=False):
 ElementTree: TypeAlias = Union[
     ScalarElement,
     ArrayProtocol,
+    FlaxArrayProtocol,
     JaxArray,
     ZeroArrayProtocol,
     CompilerTensor,
@@ -558,9 +601,16 @@ ElementTree: TypeAlias = Union[
     MappableDataclassProtocol,
     DataclassProtocol,
     NamedTupleProtocol,
+    FlaxVariableBase,
     Sequence["ElementTree"],
     Mapping[str, "ElementTree"],
+    FrozenDict,
+    FlaxState,
 ]
+
+OptaxSchedule: TypeAlias = Callable[[Union[int, CompilerTensor]], Union[float, int, CompilerTensor, ArrayProtocol]]
+SeedSpec: TypeAlias = Union[int, ArrayProtocol, FlaxRngs, FlaxRngStream]
+WeightSpec: TypeAlias = Union[float, int, OptaxSchedule]
 
 T = TypeVar("T", bound=ElementTree)
 T_co = TypeVar("T_co", bound=ElementTree, covariant=True)
@@ -667,6 +717,12 @@ __all__ = [
     "DataclassProtocol",
     "ElementTree",
     "FlaggedArrayProtocol",
+    "FlaxRngStream",
+    "FlaxRngs",
+    "FlaxState",
+    "FlaxVariable",
+    "FlaxVariableBase",
+    "FrozenDict",
     "JaxArray",
     "JaxArrayLikeSpec",
     "MappableDataclassProtocol",
@@ -675,8 +731,10 @@ __all__ = [
     "NumpyModuleProtocol",
     "NumpyRandomModuleProtocol",
     "ObjectDTypeProtocol",
+    "OptaxSchedule",
     "RNGGeneratorProtocol",
     "ScalarElement",
+    "SeedSpec",
     "SharedMemoryMetadataProtocol",
     "SliceProtocol",
     "T",
@@ -684,6 +742,7 @@ __all__ = [
     "T_in",
     "T_out",
     "ToListArrayProtocol",
+    "WeightSpec",
     "ZeroArrayProtocol",
     "_ZERO_JAX_NUMPY_ADAPTER",
     "_infer_nested_list_and_shape",

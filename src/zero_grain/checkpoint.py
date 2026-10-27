@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import os
+from typing import TypeVar
 from zero_grain._types import CheckpointStateDict, ElementTree
 from zero_orbax.checkpoint import (
     AsyncCheckpointHandler,
+    CheckpointHandlerRegistry,
+    DefaultCheckpointHandlerRegistry,
     _CheckpointArgsBase,
     args as orbax_args,
 )
 from zero_orbax.core import AtomicWrite, FileSystemIO
 from zero_orbax.types import GrainIteratorProtocol, JsonValue, PathLike, PyTree
+
+_V_co = TypeVar("_V_co", covariant=True)
 
 
 def _state_to_json_dict(state: CheckpointStateDict) -> dict[str, JsonValue]:
@@ -61,12 +67,42 @@ def _extract_process_shard(
     return proc_idx, proc_cnt
 
 
+def _coerce_state_dict(
+    raw_map: CheckpointStateDict | Mapping[str, _V_co],
+) -> CheckpointStateDict | None:
+    """Coerce a mapping into a ``CheckpointStateDict`` if it represents iterator state.
+
+    Args:
+        raw_map (CheckpointStateDict | Mapping[str, _V_co]):
+            Candidate state mapping.
+
+    Returns:
+        CheckpointStateDict | None: Coerced ``CheckpointStateDict`` or None.
+    """
+    raw_indices = raw_map.get("last_seen_indices")
+    if not isinstance(raw_indices, Mapping):
+        return None
+    ver = raw_map.get("version", 2)
+    last_w = raw_map.get("last_worker_index", -1)
+    w_cnt = raw_map.get("worker_count", 0)
+    sampler_str = raw_map.get("sampler", "")
+    source_str = raw_map.get("data_source", "")
+    return {
+        "version": int(ver) if isinstance(ver, int) else 2,
+        "last_seen_indices": {str(k): int(v) for k, v in raw_indices.items() if isinstance(v, int)},
+        "last_worker_index": int(last_w) if isinstance(last_w, int) else -1,
+        "worker_count": int(w_cnt) if isinstance(w_cnt, int) else 0,
+        "sampler": str(sampler_str) if isinstance(sampler_str, str) else "",
+        "data_source": str(source_str) if isinstance(source_str, str) else "",
+    }
+
+
 def _unwrap_iterator_arg(
     item: GrainIteratorProtocol | _CheckpointArgsBase | ElementTree | PyTree,
     pos_args: tuple[GrainIteratorProtocol | _CheckpointArgsBase | ElementTree | PyTree, ...],
     kwargs: dict[str, GrainIteratorProtocol | _CheckpointArgsBase | ElementTree | PyTree],
-) -> GrainIteratorProtocol | None:
-    """Extract a ``GrainIteratorProtocol`` from positional or keyword ``CheckpointArgs``.
+) -> tuple[GrainIteratorProtocol | None, CheckpointStateDict | None]:
+    """Extract a ``GrainIteratorProtocol`` or ``CheckpointStateDict`` from positional or keyword ``CheckpointArgs``.
 
     Args:
         item (GrainIteratorProtocol | _CheckpointArgsBase | ElementTree | PyTree): Primary item or args wrapper.
@@ -74,7 +110,8 @@ def _unwrap_iterator_arg(
         kwargs (dict[str, GrainIteratorProtocol | _CheckpointArgsBase | ElementTree | PyTree]): Keyword args.
 
     Returns:
-        GrainIteratorProtocol | None: Unwrapped iterator instance or None.
+        tuple[GrainIteratorProtocol | None, CheckpointStateDict | None]:
+            Pair of ``(iterator_or_none, explicit_state_dict_or_none)``.
     """
     candidate: GrainIteratorProtocol | _CheckpointArgsBase | ElementTree | PyTree = item
     if candidate is None:
@@ -83,9 +120,73 @@ def _unwrap_iterator_arg(
         elif len(pos_args) >= 1:
             candidate = pos_args[0]
     if isinstance(candidate, _CheckpointArgsBase):
-        inner = candidate.item
-        return inner if isinstance(inner, GrainIteratorProtocol) else None
-    return candidate if isinstance(candidate, GrainIteratorProtocol) else None
+        candidate = candidate.item
+    if isinstance(candidate, GrainIteratorProtocol):
+        return candidate, None
+    if isinstance(candidate, Mapping):
+        return None, _coerce_state_dict(candidate)
+    return None, None
+
+
+def validate_restored_state(
+    state: CheckpointStateDict,
+    iterator: GrainIteratorProtocol | None = None,
+) -> None:
+    """Validate a restored ``CheckpointStateDict`` using ``zero_chex`` assertions before mutating ``iterator``.
+
+    Args:
+        state (CheckpointStateDict): Restored checkpoint state dictionary.
+        iterator (GrainIteratorProtocol | None): Target iterator to validate against when provided.
+
+    Raises:
+        ValueError: If ``version``, ``last_seen_indices``, ``sampler``, or ``data_source`` is invalid.
+    """
+    import zero_optax as _zero_optax  # noqa: F401
+    import zero_chex
+
+    version_val = state.get("version", 2)
+    zero_chex.assert_scalar_non_negative(
+        version_val,
+        custom_message=f"Checkpoint version must be non-negative, got {version_val}",
+        exception_type=ValueError,
+    )
+    indices = state.get("last_seen_indices")
+    zero_chex.assert_equal(
+        isinstance(indices, dict),
+        True,
+        custom_message="Checkpoint last_seen_indices must be a dict",
+        exception_type=ValueError,
+    )
+    if iterator is not None:
+        expected = iterator.get_state()
+        zero_chex.assert_equal(
+            state.get("version", 2),
+            expected.get("version", 2),
+            custom_message=(
+                f"Checkpoint version {state.get('version', 2)} does not match expected {expected.get('version', 2)}"
+            ),
+            exception_type=ValueError,
+        )
+        state_sampler = state.get("sampler", "")
+        expected_sampler = expected.get("sampler", "")
+        if state_sampler and expected_sampler:
+            zero_chex.assert_equal(
+                state_sampler,
+                expected_sampler,
+                custom_message=f"Checkpoint sampler {state_sampler} does not match DataLoader sampler {expected_sampler}",
+                exception_type=ValueError,
+            )
+        state_source = state.get("data_source", "")
+        expected_source = expected.get("data_source", "")
+        if state_source and expected_source:
+            zero_chex.assert_equal(
+                state_source,
+                expected_source,
+                custom_message=(
+                    f"Checkpoint data_source {state_source} does not match DataLoader data_source {expected_source}"
+                ),
+                exception_type=ValueError,
+            )
 
 
 class CheckpointHandler(AsyncCheckpointHandler):
@@ -130,17 +231,17 @@ class CheckpointHandler(AsyncCheckpointHandler):
 
         Args:
             directory (PathLike | None): Target checkpoint directory or virtual URI.
-            item (PyTree | _CheckpointArgsBase | ElementTree): Iterator or ``CheckpointArgs`` to save.
+            item (PyTree | _CheckpointArgsBase | ElementTree): Iterator, state dict, or ``CheckpointArgs`` to save.
             *pos_args (PyTree | _CheckpointArgsBase | ElementTree): Additional positional arguments.
             **kwargs (PyTree | _CheckpointArgsBase | ElementTree): Additional keyword arguments.
         """
-        target_item = _unwrap_iterator_arg(item, pos_args, kwargs)
-        if directory is None or target_item is None:
+        target_item, explicit_state = _unwrap_iterator_arg(item, pos_args, kwargs)
+        if directory is None or (target_item is None and explicit_state is None):
             return
         proc_idx, proc_cnt = _extract_process_shard(pos_args, kwargs)
         dir_str = os.fspath(directory) if isinstance(directory, os.PathLike) else str(directory)
         FileSystemIO().makedirs(dir_str, exist_ok=True)
-        state = target_item.get_state()
+        state: CheckpointStateDict = target_item.get_state() if target_item is not None else (explicit_state or {})
         self._last_state = state
         filename = self._resolve_checkpoint_filename(
             process_index=proc_idx,
@@ -170,7 +271,7 @@ class CheckpointHandler(AsyncCheckpointHandler):
         Returns:
             PyTree: Restored iterator if ``item`` was given, raw state dict if only ``directory`` was given, or None.
         """
-        target_item = _unwrap_iterator_arg(item, pos_args, kwargs)
+        target_item, _ = _unwrap_iterator_arg(item, pos_args, kwargs)
         if directory is None:
             return target_item
         proc_idx, proc_cnt = _extract_process_shard(pos_args, kwargs)
@@ -187,8 +288,10 @@ class CheckpointHandler(AsyncCheckpointHandler):
         state: CheckpointStateDict = json.loads(raw_bytes.decode("utf-8"))
         self._last_state = state
         if target_item is not None:
+            validate_restored_state(state, target_item)
             target_item.set_state(state)
             return target_item
+        validate_restored_state(state, None)
         state_pytree: dict[str, PyTree] = json.loads(raw_bytes.decode("utf-8"))
         return state_pytree
 
@@ -246,18 +349,22 @@ PyGrainCheckpointHandler = CheckpointHandler
 
 @orbax_args.register_with_handler(PyGrainCheckpointHandler, for_save=True)
 class PyGrainCheckpointSave(orbax_args.CheckpointArgs):
-    """``zero_orbax`` ``CheckpointArgs`` wrapper for saving a Grain iterator."""
+    """``zero_orbax`` ``CheckpointArgs`` wrapper for saving a Grain iterator or state dictionary."""
 
     def __init__(
         self,
-        item: GrainIteratorProtocol | PyTree = None,
+        item: GrainIteratorProtocol | CheckpointStateDict | PyTree = None,
     ) -> None:
         """Initialize ``PyGrainCheckpointSave``.
 
         Args:
-            item (GrainIteratorProtocol | PyTree): Grain iterator to checkpoint.
+            item (GrainIteratorProtocol | CheckpointStateDict | PyTree): Grain iterator or state dict to checkpoint.
         """
-        super().__init__(item=item)
+        coerced = _coerce_state_dict(item) if isinstance(item, Mapping) else None
+        resolved_item: PyTree = (
+            _state_to_json_dict(coerced) if coerced is not None else (item if not isinstance(item, Mapping) else None)
+        )
+        super().__init__(item=resolved_item)
 
 
 @orbax_args.register_with_handler(PyGrainCheckpointHandler, for_restore=True)
@@ -276,9 +383,37 @@ class PyGrainCheckpointRestore(orbax_args.CheckpointArgs):
         super().__init__(item=item)
 
 
+def register_with_orbax(
+    registry: CheckpointHandlerRegistry | None = None,
+    item_name: str | None = None,
+) -> CheckpointHandlerRegistry:
+    """Register ``PyGrainCheckpointHandler``, ``PyGrainCheckpointSave``, and ``PyGrainCheckpointRestore`` in ``registry``.
+
+    Args:
+        registry (CheckpointHandlerRegistry | None): Target ``CheckpointHandlerRegistry`` (or new default registry).
+        item_name (str | None): Optional named checkpoint item (e.g. ``"iterator"`` or ``"dataset"``).
+
+    Returns:
+        CheckpointHandlerRegistry: Registry populated with ``PyGrainCheckpointHandler`` bindings.
+    """
+    target_registry: CheckpointHandlerRegistry = (
+        registry if registry is not None else DefaultCheckpointHandlerRegistry()
+    )
+    target_registry.add(item_name, PyGrainCheckpointSave, PyGrainCheckpointHandler, override=True)
+    target_registry.add(item_name, PyGrainCheckpointRestore, PyGrainCheckpointHandler, override=True)
+    if item_name is not None:
+        target_registry.add(item_name, None, PyGrainCheckpointHandler, override=True)
+    return target_registry
+
+
+_DEFAULT_GRAIN_HANDLER_REGISTRY: CheckpointHandlerRegistry = register_with_orbax()
+
+
 __all__ = [
     "CheckpointHandler",
     "PyGrainCheckpointHandler",
     "PyGrainCheckpointRestore",
     "PyGrainCheckpointSave",
+    "register_with_orbax",
+    "validate_restored_state",
 ]

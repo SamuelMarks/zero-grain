@@ -480,6 +480,8 @@ class BatchOperation(Operation[T_in, ElementTree]):
         batch_size: int = 1,
         drop_remainder: bool = False,
         batch_fn: Callable[[Sequence[T_in]], ElementTree] | None = None,
+        *,
+        as_jax_array: bool = False,
     ) -> None:
         """Initialize ``BatchOperation``.
 
@@ -487,6 +489,7 @@ class BatchOperation(Operation[T_in, ElementTree]):
             batch_size (int): Number of records per batch (must be ``> 0``).
             drop_remainder (bool): Whether to drop incomplete final batches.
             batch_fn (Callable[[Sequence[T_in]], ElementTree] | None): Custom batching callable.
+            as_jax_array (bool): Whether to stack leaves directly into ``zero_jax.numpy.ndarray`` tensors.
 
         Raises:
             ValueError: If ``batch_size <= 0``.
@@ -497,6 +500,7 @@ class BatchOperation(Operation[T_in, ElementTree]):
         self.batch_size = batch_size
         self.drop_remainder = drop_remainder
         self.batch_fn = batch_fn
+        self.as_jax_array = as_jax_array
         self._use_shared_memory = False
 
     def _enable_shared_memory(self) -> None:
@@ -515,7 +519,7 @@ class BatchOperation(Operation[T_in, ElementTree]):
         if self.batch_fn is not None:
             collated: ElementTree = self.batch_fn(items)
         else:
-            collated = _batch_elements(items)
+            collated = _batch_elements(items, as_jax_array=self.as_jax_array)
         if self._use_shared_memory:
             return map_tree(_convert_leaf_to_shm, collated)
         return collated

@@ -5,16 +5,24 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 import enum
 import math
-from typing import Generic, overload
-from zero_grain._rng import index_shuffle
+from typing import Generic, Union, overload
+from typing_extensions import TypeAlias
+from zero_grain._rng import _resolve_seed_int, index_shuffle
 from zero_grain._tree import spec_like
 from zero_grain._types import (
+    ArrayProtocol,
     CheckpointStateDict,
+    CompilerTensor,
     ElementTree,
+    JaxArray,
+    OptaxSchedule,
     RNGGeneratorProtocol,
+    SeedSpec,
     SliceProtocol,
     T_co,
     T_out,
+    WeightSpec,
+    array_to_list,
 )
 from zero_grain.data_loader import (
     DataLoader,
@@ -184,43 +192,123 @@ class DatasetSelectionMap:
         return self._mapping[index]
 
 
+WeightsInputSpec: TypeAlias = Union[
+    Sequence[WeightSpec],
+    Callable[[int], Sequence[Union[float, int, CompilerTensor, ArrayProtocol]]],
+]
+
+
+def _extract_weight_float(raw_val: float | int | CompilerTensor | ArrayProtocol) -> float:
+    """Validate and convert a raw or scheduled weight value into a Python ``float``.
+
+    Validates finiteness via ``zero_chex.assert_tree_all_finite`` and non-negativity
+    via ``zero_chex.assert_scalar_non_negative``.
+
+    Args:
+        raw_val (float | int | CompilerTensor | ArrayProtocol): Weight scalar or tensor.
+
+    Returns:
+        float: Validated non-negative finite weight float.
+
+    Raises:
+        ValueError: If ``raw_val`` is non-finite or negative.
+    """
+    import zero_optax as _zero_optax  # noqa: F401
+    import zero_chex
+
+    zero_chex.assert_tree_all_finite(raw_val, exception_type=ValueError)
+    if isinstance(raw_val, CompilerTensor):
+        extracted = array_to_list(JaxArray(raw_val))
+        scalar_val = extracted[0] if isinstance(extracted, list) and len(extracted) > 0 else extracted
+        f_val = float(scalar_val) if isinstance(scalar_val, (int, float)) else 0.0
+    elif isinstance(raw_val, ArrayProtocol):
+        extracted = array_to_list(raw_val)
+        scalar_val = extracted[0] if isinstance(extracted, list) and len(extracted) > 0 else extracted
+        f_val = float(scalar_val) if isinstance(scalar_val, (int, float)) else 0.0
+    else:
+        f_val = float(raw_val)
+    zero_chex.assert_scalar_non_negative(
+        f_val,
+        custom_message="weights must be non-negative",
+        exception_type=ValueError,
+    )
+    return f_val
+
+
+def _evaluate_weights_at_step(
+    weights_spec: WeightsInputSpec | ElementTree | None,
+    step: int,
+    num_parents: int,
+    *,
+    strict_length: bool = True,
+) -> tuple[float, ...]:
+    """Evaluate static or ``zero_optax`` schedule mixing weights at ``step``.
+
+    Args:
+        weights_spec (WeightsInputSpec | ElementTree | None): Static weights, ``zero_optax`` schedules, or callable.
+        step (int): Dataset step index.
+        num_parents (int): Expected number of parent datasets.
+        strict_length (bool): Whether to raise ``ValueError`` if ``len(weights) != num_parents``.
+
+    Returns:
+        tuple[float, ...]: Normalized weights summing to 1.0 at ``step``.
+
+    Raises:
+        ValueError: If weights length mismatches ``num_parents``, any weight is negative/non-finite, or sum <= 0.
+    """
+    if weights_spec is None:
+        return tuple(1.0 / num_parents for _ in range(num_parents)) if num_parents > 0 else ()
+    raw_items: list[float | int | CompilerTensor | ArrayProtocol] = []
+    if callable(weights_spec):
+        seq_res = weights_spec(step)
+        raw_items = list(seq_res)
+    elif isinstance(weights_spec, (list, tuple)):
+        for item in weights_spec:
+            if callable(item):
+                sched_fn: OptaxSchedule = item
+                raw_items.append(sched_fn(step))
+            elif isinstance(item, (int, float, ArrayProtocol)):
+                raw_items.append(item)
+    if not raw_items:
+        return tuple(1.0 / num_parents for _ in range(num_parents)) if num_parents > 0 else ()
+    if num_parents > 0 and len(raw_items) != num_parents:
+        if strict_length:
+            raise ValueError(f"weights length {len(raw_items)} must match parent_lengths length {num_parents}")
+        return tuple(1.0 / num_parents for _ in range(num_parents))
+    floats = [_extract_weight_float(x) for x in raw_items]
+    weight_sum = sum(floats)
+    if weight_sum <= 0.0:
+        raise ValueError("sum of weights must be positive")
+    return tuple(w / weight_sum for w in floats)
+
+
 class SelectionWithReplacementMap(DatasetSelectionMap):
-    """Selection map sampling across multiple parent datasets with replacement according to weights."""
+    """Selection map sampling across multiple parent datasets with replacement according to static or scheduled weights."""
 
     def __init__(
         self,
         *args: ElementTree,
-        **kwargs: ElementTree,
+        **kwargs: ElementTree | WeightsInputSpec,
     ) -> None:
         """Initialize ``SelectionWithReplacementMap``.
 
         Args:
             *args (ElementTree): Optional positional parent lengths or weights.
-            **kwargs (ElementTree): Optional keyword arguments (``parent_lengths``, ``weights``, ``total_size``).
+            **kwargs (ElementTree | WeightsInputSpec): Optional keyword arguments (``parent_lengths``, ``weights``, ``total_size``).
 
         Raises:
-            ValueError: If any weight is negative or all weights sum to zero.
+            ValueError: If any weight is negative, non-finite, or all weights sum to zero.
         """
-        super().__init__(*args, **kwargs)
+        base_kwargs: dict[str, ElementTree] = {}
+        raw_pl = kwargs.get("parent_lengths")
+        if isinstance(raw_pl, (list, tuple)):
+            base_kwargs["parent_lengths"] = [int(x) for x in raw_pl if isinstance(x, int)]
+        super().__init__(*args, **base_kwargs)
         raw_weights = kwargs.get("weights")
-        weights_list: list[float] = []
-        if isinstance(raw_weights, (list, tuple)):
-            for w in raw_weights:
-                if isinstance(w, (int, float)):
-                    weights_list.append(float(w))
-            if self._parent_lengths and len(weights_list) != len(self._parent_lengths):
-                raise ValueError(
-                    f"weights length {len(weights_list)} must match parent_lengths length {len(self._parent_lengths)}"
-                )
-        if not weights_list and self._parent_lengths:
-            weights_list = [1.0 for _ in self._parent_lengths]
-        if weights_list:
-            if any(w < 0.0 for w in weights_list):
-                raise ValueError("weights must be non-negative")
-            weight_sum = sum(weights_list)
-            if weight_sum <= 0.0:
-                raise ValueError("sum of weights must be positive")
-            self.weights: tuple[float, ...] = tuple(w / weight_sum for w in weights_list)
+        self._weights_spec: WeightsInputSpec | ElementTree | None = raw_weights
+        num_parents = len(self._parent_lengths)
+        if raw_weights is not None or num_parents > 0:
+            self.weights: tuple[float, ...] = _evaluate_weights_at_step(raw_weights, 0, num_parents)
         else:
             self.weights = ()
 
@@ -232,21 +320,23 @@ class SelectionWithReplacementMap(DatasetSelectionMap):
 
         self._mapping = self._build_weighted_replacement_mapping(
             self._parent_lengths,
-            self.weights,
+            raw_weights if raw_weights is not None else self.weights,
             total_size,
         )
 
     @staticmethod
     def _build_weighted_replacement_mapping(
         lengths: Sequence[int],
-        weights: Sequence[float],
+        weights: WeightsInputSpec | Sequence[float] | ElementTree | None,
         total_size: int,
     ) -> list[tuple[int, int]]:
         """Construct a deterministic Deficit-Round-Robin schedule with replacement across ``lengths``.
 
+        Evaluates any ``zero_optax`` schedules at each step ``step_idx`` to shift sampling proportions.
+
         Args:
             lengths (Sequence[int]): Parent dataset lengths.
-            weights (Sequence[float]): Normalized parent weights summing to 1.0.
+            weights (WeightsInputSpec | Sequence[float] | ElementTree | None): Static or scheduled parent weights.
             total_size (int): Total number of elements to schedule.
 
         Returns:
@@ -255,11 +345,17 @@ class SelectionWithReplacementMap(DatasetSelectionMap):
         if not lengths or total_size <= 0:
             return []
         num_parents = len(lengths)
-        norm_weights = list(weights) if len(weights) == num_parents else [1.0 / num_parents] * num_parents
         counts = [0 for _ in range(num_parents)]
         deficits = [0.0 for _ in range(num_parents)]
         schedule: list[tuple[int, int]] = []
-        for _ in range(total_size):
+        for step_idx in range(total_size):
+            step_weights = _evaluate_weights_at_step(
+                weights,
+                step_idx,
+                num_parents,
+                strict_length=False,
+            )
+            norm_weights = list(step_weights)
             best_parent = 0
             best_score = -math.inf
             for p_idx in range(num_parents):
@@ -587,29 +683,18 @@ class MapDataset(Generic[T_co]):
     def mix(
         cls,
         datasets: Sequence[MapDataset[T_co]],
-        weights: Sequence[float] | None = None,
-    ) -> MapDataset[T_co]:
-        """Mix multiple ``MapDataset`` instances deterministically according to ``weights``.
+        weights: WeightsInputSpec | None = None,
+    ) -> MixedMapDataset[T_co]:
+        """Mix multiple ``MapDataset`` instances deterministically according to static or scheduled ``weights``.
 
         Args:
             datasets (Sequence[MapDataset[T_co]]): Sequence of parent ``MapDataset`` objects.
-            weights (Sequence[float] | None): Optional sampling weights per dataset.
+            weights (WeightsInputSpec | None): Optional sampling weights or ``zero_optax`` schedules per dataset.
 
         Returns:
-            MapDataset[T_co]: Mixed ``MapDataset``.
+            MixedMapDataset[T_co]: Mixed ``MapDataset``.
         """
-        if not datasets:
-            return cls()
-        lengths = [len(d) for d in datasets]
-        if weights is None:
-            sel_map: DatasetSelectionMap = DatasetSelectionMap(parent_lengths=lengths)
-        else:
-            sel_map = SelectionWithReplacementMap(
-                parent_lengths=lengths,
-                weights=list(weights),
-                total_size=sum(lengths),
-            )
-        return cls.select_from_datasets(datasets=datasets, selection_map=sel_map)
+        return MixedMapDataset(datasets, weights=weights)
 
     @classmethod
     def select_from_datasets(
@@ -759,32 +844,32 @@ class MapDataset(Generic[T_co]):
         """
         return iter(self.to_iter_dataset())
 
-    def seed(self, seed: int) -> MapDataset[T_co]:
+    def seed(self, seed: SeedSpec) -> MapDataset[T_co]:
         """Return a child ``MapDataset`` configured with default RNG ``seed``.
 
         Args:
-            seed (int): Integer seed value.
+            seed (SeedSpec): Integer seed, ``zero_jax.random.PRNGKey``, ``Rngs``, or ``RngStream``.
 
         Returns:
             MapDataset[T_co]: Dataset with updated seed.
         """
-        return self._clone_with(seed=seed, step_kind="ops")
+        return self._clone_with(seed=_resolve_seed_int(seed), step_kind="ops")
 
-    def shuffle(self, seed: int | None = None) -> MapDataset[T_co]:
+    def shuffle(self, seed: SeedSpec | None = None) -> MapDataset[T_co]:
         """Return a shuffled view of the dataset.
 
         Args:
-            seed (int | None): Optional shuffle seed.
+            seed (SeedSpec | None): Optional shuffle seed, ``PRNGKey``, ``Rngs``, or ``RngStream``.
 
         Returns:
             MapDataset[T_co]: Shuffled dataset.
         """
-        effective_seed = seed if seed is not None else self._seed
+        resolved = _resolve_seed_int(seed) if seed is not None else self._seed
         return self._clone_with(
             shuffled=True,
-            seed=effective_seed,
+            seed=resolved,
             step_kind="shuffle",
-            step_shuffle_seed=effective_seed,
+            step_shuffle_seed=resolved,
         )
 
     def map(
@@ -846,14 +931,14 @@ class MapDataset(Generic[T_co]):
             | RandomMapTransform[ElementTree, ElementTree]
             | RandomMapOperation[ElementTree, ElementTree]
         ),
-        seed: int | None = None,
+        seed: SeedSpec | None = None,
     ) -> MapDataset[T_out]:
         """Apply a stochastic transformation to each element.
 
         Args:
             transform (Callable[[ElementTree, RNGGeneratorProtocol], ElementTree] | RandomMapTransform[ElementTree, ElementTree] | RandomMapOperation[ElementTree, ElementTree]):
                 Random map transform or callable.
-            seed (int | None): Optional seed override.
+            seed (SeedSpec | None): Optional seed, ``PRNGKey``, ``Rngs``, or ``RngStream`` override.
 
         Returns:
             MapDataset[T_out]: Transformed ``MapDataset``.
@@ -861,10 +946,11 @@ class MapDataset(Generic[T_co]):
         op: Operation[ElementTree, ElementTree] = (
             transform if isinstance(transform, Operation) else RandomMapOperation(transform)
         )
+        resolved = _resolve_seed_int(seed) if seed is not None else self._seed
         return self._clone_with(
             operations=(*self.operations, op),
             local_ops=(op,),
-            seed=seed if seed is not None else self._seed,
+            seed=resolved,
             step_kind="ops",
         )
 
@@ -904,6 +990,8 @@ class MapDataset(Generic[T_co]):
         batch_size: int,
         drop_remainder: bool = False,
         batch_fn: Callable[[Sequence[ElementTree]], ElementTree] | None = None,
+        *,
+        as_jax_array: bool = False,
     ) -> BatchDataset[T_out]:
         """Batch consecutive elements into groups of ``batch_size``.
 
@@ -911,6 +999,7 @@ class MapDataset(Generic[T_co]):
             batch_size (int): Number of elements per batch.
             drop_remainder (bool): Whether to drop incomplete final batches.
             batch_fn (Callable[[Sequence[ElementTree]], ElementTree] | None): Custom collation function.
+            as_jax_array (bool): Whether to stack leaves directly into ``zero_jax.numpy.ndarray`` tensors.
 
         Returns:
             BatchDataset[T_out]: Batched dataset.
@@ -919,6 +1008,7 @@ class MapDataset(Generic[T_co]):
             batch_size=batch_size,
             drop_remainder=drop_remainder,
             batch_fn=batch_fn,
+            as_jax_array=as_jax_array,
         )
         child: BatchDataset[T_out] = BatchDataset(
             self,
@@ -1553,14 +1643,14 @@ class IterDataset(Generic[T_co]):
             | RandomMapTransform[ElementTree, ElementTree]
             | RandomMapOperation[ElementTree, ElementTree]
         ),
-        seed: int | None = None,
+        seed: SeedSpec | None = None,
     ) -> IterDataset[T_out]:
         """Apply a streaming stochastic transformation to each element of this ``IterDataset``.
 
         Args:
             transform (Callable[[ElementTree, RNGGeneratorProtocol], ElementTree] | RandomMapTransform[ElementTree, ElementTree] | RandomMapOperation[ElementTree, ElementTree]):
                 Random map transform, operation, or callable.
-            seed (int | None): Optional RNG seed override.
+            seed (SeedSpec | None): Optional RNG seed, ``PRNGKey``, ``Rngs``, or ``RngStream`` override.
 
         Returns:
             IterDataset[T_out]: Stochastically mapped ``IterDataset``.
@@ -1609,6 +1699,8 @@ class IterDataset(Generic[T_co]):
         batch_size: int,
         drop_remainder: bool = False,
         batch_fn: Callable[[Sequence[ElementTree]], ElementTree] | None = None,
+        *,
+        as_jax_array: bool = False,
     ) -> IterDataset[T_out]:
         """Batch consecutive elements of this ``IterDataset`` into groups of ``batch_size``.
 
@@ -1616,6 +1708,7 @@ class IterDataset(Generic[T_co]):
             batch_size (int): Number of elements per batch.
             drop_remainder (bool): Whether to drop incomplete final batches.
             batch_fn (Callable[[Sequence[ElementTree]], ElementTree] | None): Custom collation function.
+            as_jax_array (bool): Whether to stack leaves directly into ``zero_jax.numpy.ndarray`` tensors.
 
         Returns:
             IterDataset[T_out]: Batched ``IterDataset``.
@@ -1625,6 +1718,7 @@ class IterDataset(Generic[T_co]):
             batch_size=batch_size,
             drop_remainder=drop_remainder,
             batch_fn=batch_fn,
+            as_jax_array=as_jax_array,
         )
         return IterDataset(
             batched_ds,
@@ -1639,22 +1733,18 @@ class IterDataset(Generic[T_co]):
     def mix(
         cls,
         datasets: Sequence[IterDataset[T_co] | MapDataset[T_co]],
-        weights: Sequence[float] | None = None,
-    ) -> IterDataset[T_co]:
-        """Mix multiple ``IterDataset`` or ``MapDataset`` streams according to ``weights``.
+        weights: WeightsInputSpec | None = None,
+    ) -> MixedIterDataset[T_co]:
+        """Mix multiple ``IterDataset`` or ``MapDataset`` streams according to static or scheduled ``weights``.
 
         Args:
             datasets (Sequence[IterDataset[T_co] | MapDataset[T_co]]): Sequence of datasets to mix.
-            weights (Sequence[float] | None): Optional sampling weights per dataset.
+            weights (WeightsInputSpec | None): Optional sampling weights or ``zero_optax`` schedules per dataset.
 
         Returns:
-            IterDataset[T_co]: Mixed ``IterDataset``.
+            MixedIterDataset[T_co]: Mixed ``IterDataset``.
         """
-        map_datasets: list[MapDataset[T_co]] = [
-            d if isinstance(d, MapDataset) else d._materialize_as_map_dataset() for d in datasets
-        ]
-        mixed_map = MapDataset.mix(map_datasets, weights=weights)
-        return cls(mixed_map)
+        return MixedIterDataset(datasets, weights=weights)
 
     def prefetch(
         self,
@@ -1736,6 +1826,63 @@ class IterDataset(Generic[T_co]):
             f"sampler={self.dl.sampler!r}, "
             f"operations={len(self.dl.operations)}))"
         )
+
+
+class MixedMapDataset(MapDataset[T_co]):
+    """``MapDataset`` mixing multiple parent ``MapDataset`` instances using static or ``zero_optax`` scheduled weights."""
+
+    def __init__(
+        self,
+        parents: Sequence[MapDataset[T_co]] = (),
+        weights: WeightsInputSpec | None = None,
+        selection_map: DatasetSelectionMap | None = None,
+    ) -> None:
+        """Initialize ``MixedMapDataset``.
+
+        Args:
+            parents (Sequence[MapDataset[T_co]]): Parent ``MapDataset`` instances to mix.
+            weights (WeightsInputSpec | None): Optional static weights, ``zero_optax`` schedules, or callable schedule.
+            selection_map (DatasetSelectionMap | None): Optional explicit ``DatasetSelectionMap``.
+        """
+        self.weights_spec: WeightsInputSpec | None = weights
+        if not parents:
+            super().__init__()
+            return
+        if selection_map is not None:
+            resolved_map = selection_map
+        elif weights is None:
+            lengths = [len(d) for d in parents]
+            resolved_map = DatasetSelectionMap(parent_lengths=lengths)
+        else:
+            lengths = [len(d) for d in parents]
+            resolved_map = SelectionWithReplacementMap(
+                parent_lengths=lengths,
+                weights=weights,
+                total_size=sum(lengths),
+            )
+        super().__init__(parents, selection_map=resolved_map)
+
+
+class MixedIterDataset(IterDataset[T_co]):
+    """``IterDataset`` mixing multiple parent datasets using static or ``zero_optax`` scheduled weights."""
+
+    def __init__(
+        self,
+        parents: Sequence[IterDataset[T_co] | MapDataset[T_co]] = (),
+        weights: WeightsInputSpec | None = None,
+    ) -> None:
+        """Initialize ``MixedIterDataset``.
+
+        Args:
+            parents (Sequence[IterDataset[T_co] | MapDataset[T_co]]): Parent datasets to mix.
+            weights (WeightsInputSpec | None): Optional static weights, ``zero_optax`` schedules, or callable schedule.
+        """
+        self.weights_spec: WeightsInputSpec | None = weights
+        map_datasets: list[MapDataset[T_co]] = [
+            d if isinstance(d, MapDataset) else d._materialize_as_map_dataset() for d in parents
+        ]
+        mixed_map = MixedMapDataset(map_datasets, weights=weights)
+        super().__init__(mixed_map)
 
 
 class DatasetIterator(Generic[T_co]):
@@ -1877,9 +2024,14 @@ __all__ = [
     "FilterDataset",
     "IterDataset",
     "MapDataset",
+    "MixedIterDataset",
+    "MixedMapDataset",
     "SelectionWithReplacementMap",
+    "WeightsInputSpec",
     "_MapDatasetDataSource",
     "_SlicedDataSource",
+    "_evaluate_weights_at_step",
+    "_extract_weight_float",
     "_needs_graph_evaluation",
     "apply_transformations",
     "get_element_spec",

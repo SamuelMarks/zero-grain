@@ -188,6 +188,8 @@ class Batch(Transformation, Generic[T_in, T_out]):
         batch_size: int = 1,
         drop_remainder: bool = False,
         batch_fn: Callable[[Sequence[T_in]], T_out] | None = None,
+        *,
+        as_jax_array: bool = False,
     ) -> None:
         """Initialize ``Batch``.
 
@@ -195,6 +197,7 @@ class Batch(Transformation, Generic[T_in, T_out]):
             batch_size (int): Number of elements to combine per batch (must be ``> 0``).
             drop_remainder (bool): Whether to drop trailing incomplete batches.
             batch_fn (Callable[[Sequence[T_in]], T_out] | None): Custom batching callable.
+            as_jax_array (bool): Whether to stack leaves directly into ``zero_jax.numpy.ndarray`` tensors.
 
         Raises:
             ValueError: If ``batch_size <= 0``.
@@ -205,6 +208,7 @@ class Batch(Transformation, Generic[T_in, T_out]):
         self.batch_size = batch_size
         self.drop_remainder = drop_remainder
         self.batch_fn = batch_fn
+        self.as_jax_array = as_jax_array
 
 
 BatchTransform = Batch

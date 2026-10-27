@@ -7,17 +7,48 @@ import dataclasses
 import functools
 import math
 import random
-from zero_flax.nnx.rnglib import Rngs as FlaxRngs
+from zero_flax.nnx.rnglib import RngStream as FlaxRngStream, Rngs as FlaxRngs
 from zero_grain._types import (
+    _ZERO_JAX_NUMPY_ADAPTER,
     ArrayProtocol,
+    JaxArray,
+    JaxArrayLikeSpec,
     NestedNumericList,
     RNGGeneratorProtocol,
     ScalarElement,
+    SeedSpec,
     array_to_list,
     get_numpy_module,
 )
+import zero_jax
 
 _MIN_BLOCK_SIZE = 16
+
+
+def _as_jax_key(raw_key: JaxArrayLikeSpec) -> JaxArray:
+    """Coerce a ``zero_jax.random`` key output into a ``JaxArray``.
+
+    Args:
+        raw_key (JaxArrayLikeSpec): Output of ``PRNGKey`` or ``fold_in``.
+
+    Returns:
+        JaxArray: ``zero_jax.numpy.ndarray`` PRNG key.
+    """
+    return raw_key if isinstance(raw_key, JaxArray) else _ZERO_JAX_NUMPY_ADAPTER.array([0, 0], dtype="uint32")
+
+
+def _split_jax_key(key: JaxArray, num: int = 2) -> list[JaxArray]:
+    """Split a ``JaxArray`` PRNG key into ``num`` subkeys using ``zero_jax.random.split``.
+
+    Args:
+        key (JaxArray): Input 2-element ``uint32`` PRNG key.
+        num (int): Number of subkeys to produce.
+
+    Returns:
+        list[JaxArray]: List of ``num`` ``JaxArray`` subkeys.
+    """
+    split_raw = zero_jax.random.split(key, num)
+    return [_as_jax_key(split_raw[i]) for i in range(num)] if isinstance(split_raw, JaxArray) else [key] * num
 
 
 @functools.lru_cache(maxsize=256)
@@ -130,21 +161,29 @@ def index_shuffle(index: int, max_index: int, seed: int, rounds: int = 4) -> int
 
 @dataclasses.dataclass
 class DeterministicGenerator(RNGGeneratorProtocol):
-    """Pure-Python deterministic random number generator compatible with Grain RNGs."""
+    """Pure-Python deterministic random number generator compatible with Grain, JAX, and Flax RNGs."""
 
     _seed: int | None = None
     _algorithm_name: str = "PCG64"
+    _jax_key: JaxArray | None = None
 
-    def __init__(self, seed: int | None = None, algorithm_name: str = "PCG64") -> None:
+    def __init__(
+        self,
+        seed: int | None = None,
+        algorithm_name: str = "PCG64",
+        jax_key: JaxArray | None = None,
+    ) -> None:
         """Initialize the deterministic generator.
 
         Args:
             seed (int | None): Optional integer seed for reproducibility.
             algorithm_name (str): Bit-generator display name for string formatting.
+            jax_key (JaxArray | None): Optional pre-derived ``zero_jax.random.PRNGKey`` array.
         """
         self._seed = seed
         self._algorithm_name = algorithm_name
         self._rng = random.Random(seed)
+        self._jax_key = jax_key
 
     def random(self) -> float:
         """Return a random floating-point value in ``[0.0, 1.0)``.
@@ -193,6 +232,33 @@ class DeterministicGenerator(RNGGeneratorProtocol):
         self._rng.shuffle(items)
         return items
 
+    def jax_key(self) -> JaxArray:
+        """Return a deterministic ``zero_jax.random.PRNGKey`` array and split internal state.
+
+        Returns:
+            JaxArray: 2-element ``uint32`` ``zero_jax.numpy.ndarray`` PRNGKey.
+        """
+        if self._jax_key is None:
+            base_int = 0 if self._seed is None else (self._seed & 0xFFFFFFFF)
+            self._jax_key = _as_jax_key(zero_jax.random.PRNGKey(base_int))
+        split_pair = _split_jax_key(self._jax_key, 2)
+        subkey: JaxArray = split_pair[0]
+        self._jax_key = split_pair[1]
+        return subkey
+
+    def flax_rngs(self) -> FlaxRngs:
+        """Return a ``zero_flax.nnx.Rngs`` container initialized from ``self.jax_key()``.
+
+        Populates ``default``, ``params``, and ``dropout`` streams so ``zero_flax.nnx``
+        modules (such as ``Dropout`` or ``Linear``) can be invoked directly inside
+        stochastic data transforms.
+
+        Returns:
+            FlaxRngs: Initialized ``zero_flax.nnx.Rngs`` container.
+        """
+        split_keys = _split_jax_key(self.jax_key(), 3)
+        return FlaxRngs(split_keys[0], params=split_keys[1], dropout=split_keys[2])
+
     def __repr__(self) -> str:
         """Return the string representation matching NumPy Generator format.
 
@@ -222,12 +288,12 @@ def _extract_array_seed(key_arr: ArrayProtocol) -> int:
 
 
 def _resolve_seed_int(
-    seed: int | ArrayProtocol | FlaxRngs | None,
+    seed: SeedSpec | None,
 ) -> int | None:
-    """Resolve an ``int``, ``PRNGKey`` array, or ``zero_flax.nnx.Rngs`` into an integer seed.
+    """Resolve an ``int``, ``PRNGKey`` array, ``Rngs``, or ``RngStream`` into an integer seed.
 
     Args:
-        seed (int | ArrayProtocol | FlaxRngs | None): Seed value or PRNG key source.
+        seed (SeedSpec | None): Seed value or PRNG key source.
 
     Returns:
         int | None: Resolved integer seed, or None if ``seed`` is None.
@@ -236,18 +302,18 @@ def _resolve_seed_int(
         return None
     if isinstance(seed, int):
         return seed
-    if isinstance(seed, FlaxRngs):
+    if isinstance(seed, (FlaxRngs, FlaxRngStream)):
         return _extract_array_seed(seed())
     return _extract_array_seed(seed)
 
 
 def create_rng(
-    seed: int | ArrayProtocol | FlaxRngs | None = None,
+    seed: SeedSpec | None = None,
 ) -> RNGGeneratorProtocol:
     """Create a deterministic RNG using NumPy when loaded or pure Python otherwise.
 
     Args:
-        seed (int | ArrayProtocol | FlaxRngs | None): Optional integer seed, PRNGKey, or Rngs.
+        seed (SeedSpec | None): Optional integer seed, ``PRNGKey``, ``Rngs``, or ``RngStream``.
 
     Returns:
         RNGGeneratorProtocol: Deterministic random number generator instance.
@@ -260,14 +326,17 @@ def create_rng(
 
 
 def derive_rng(
-    base_seed: int | ArrayProtocol | FlaxRngs | None,
+    base_seed: SeedSpec | None,
     index: int,
     op_seed: int = 0,
 ) -> DeterministicGenerator:
     """Derive a per-record deterministic RNG from ``base_seed``, ``index``, and ``op_seed``.
 
+    Uses ``zero_jax.random.fold_in`` and ``zero_jax.random.split`` to derive an
+    independent per-record ``PRNGKey`` alongside the deterministic integer seed.
+
     Args:
-        base_seed (int | ArrayProtocol | FlaxRngs | JaxArrayLikeSpec | None): Base seed, PRNGKey, or Rngs.
+        base_seed (SeedSpec | None): Base integer seed, ``PRNGKey``, ``Rngs``, or ``RngStream``.
         index (int): Global record index.
         op_seed (int): Operation-level seed offset.
 
@@ -276,8 +345,21 @@ def derive_rng(
     """
     resolved_base = _resolve_seed_int(base_seed)
     effective_base = 0 if resolved_base is None else resolved_base
+    if isinstance(base_seed, JaxArray) and base_seed.shape == (2,):
+        base_key: JaxArray = base_seed
+    else:
+        base_key = _as_jax_key(zero_jax.random.PRNGKey(effective_base & 0xFFFFFFFF))
+    folded_key: JaxArray = _as_jax_key(zero_jax.random.fold_in(base_key, index))
+    if op_seed != 0:
+        folded_key = _as_jax_key(zero_jax.random.fold_in(folded_key, op_seed))
+    split_keys = _split_jax_key(folded_key, 2)
+    derived_key: JaxArray = split_keys[0]
     combined_seed = (effective_base * 1_000_003 + index * 9_999_991 + op_seed) & 0xFFFFFFFF
-    return DeterministicGenerator(seed=combined_seed, algorithm_name="Philox")
+    return DeterministicGenerator(
+        seed=combined_seed,
+        algorithm_name="Philox",
+        jax_key=derived_key,
+    )
 
 
 __all__ = [

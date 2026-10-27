@@ -1007,6 +1007,7 @@ def test_ecosystem_chex_jax_flax_optax_integration() -> None:
     from ml_switcheroo_compiler import ops as compiler_ops
     from ml_switcheroo_compiler.core.dtype import DType as CompilerDType
     from ml_switcheroo_compiler.core.tensor import Tensor as CompilerTensor
+    import zero_optax as _zero_optax  # noqa: F401
     import zero_chex as chex
     from zero_chex.types import ZeroArray
     from zero_flax import nnx
@@ -1560,12 +1561,85 @@ def test_multistage_graph_evaluation_and_sequential_slice_and_shm(
         monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
     import sys
-    from zero_grain._types import array_to_list
+    from zero_grain._types import DTypeSpec, array_to_list
     from zero_grain.dataset import _DatasetStepKind, _normalize_step_kind
     from zero_grain.shared_memory_array import SharedMemoryArray, _dtype_itemsize
 
     assert _normalize_step_kind(_DatasetStepKind.OPS) is _DatasetStepKind.OPS
     assert _normalize_step_kind("shuffle") is _DatasetStepKind.SHUFFLE
+
+    class _ZeroListOnlyArray:
+        """Minimal ``ZeroArrayProtocol`` implementation exposing ``to_list()`` without ``tolist()``."""
+
+        @property
+        def shape(self) -> tuple[int, ...]:
+            """Return array shape.
+
+            Returns:
+                tuple[int, ...]: Shape tuple.
+            """
+            return (2,)
+
+        @property
+        def ndim(self) -> int:
+            """Return number of dimensions.
+
+            Returns:
+                int: Number of dimensions.
+            """
+            return 1
+
+        @property
+        def dtype(self) -> DTypeSpec:
+            """Return dtype string.
+
+            Returns:
+                DTypeSpec: Dtype string.
+            """
+            return "int32"
+
+        def to_list(self) -> list[int | float | complex | bool]:
+            """Return flat list of scalar elements.
+
+            Returns:
+                list[int | float | complex | bool]: Flat scalar values.
+            """
+            return [7, 8]
+
+    assert array_to_list(_ZeroListOnlyArray()) == [7, 8]
+
+    class _BareArray:
+        """Minimal ``ArrayProtocol`` implementation without ``tolist()`` or ``to_list()``."""
+
+        @property
+        def shape(self) -> tuple[int, ...]:
+            """Return array shape.
+
+            Returns:
+                tuple[int, ...]: Shape tuple.
+            """
+            return (1,)
+
+        @property
+        def ndim(self) -> int:
+            """Return number of dimensions.
+
+            Returns:
+                int: Number of dimensions.
+            """
+            return 1
+
+        @property
+        def dtype(self) -> DTypeSpec:
+            """Return dtype string.
+
+            Returns:
+                DTypeSpec: Dtype string.
+            """
+            return "int32"
+
+    with pytest.raises(TypeError, match="Unsupported ArrayProtocol type for list conversion"):
+        array_to_list(_BareArray())
 
     # Verify exact parity between [ds[i] ...] and list(ds) across multi-stage pipelines
     base = MapDataset.range(6)
@@ -1648,3 +1722,430 @@ def test_multistage_graph_evaluation_and_sequential_slice_and_shm(
     assert fb_arr.shape == (2,)
     assert fb_arr.ndim == 1
     meta_fb.close_and_unlink()
+
+
+def test_full_zero_ecosystem_pipeline_and_checkpoint_integration(tmp_path: Path) -> None:
+    """Verify end-to-end pipeline across ``zero_jax``, ``zero_chex``, ``zero_flax``, ``zero_optax``, and ``zero_orbax``.
+
+    Tests ``MapDataset.source(...)`` -> ``.seed(zero_flax.nnx.Rngs(42))`` -> ``.random_map(...)``
+    using ``zero_jax.random`` and ``zero_flax.nnx.Dropout`` -> ``MixedMapDataset`` with
+    ``zero_optax.linear_schedule`` mixing weights -> ``.batch(batch_size=4, as_jax_array=True)``
+    emitting ``zero_jax.numpy.ndarray`` -> ``zero_flax.nnx.Linear`` forward pass ->
+    ``zero_optax.adam`` update -> ``zero_orbax.CheckpointManager`` save/restore of
+    iterator + model + optimizer -> ``zero_chex.assert_trees_all_close``.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
+    from collections.abc import Iterator, Mapping
+    import zero_optax
+    import zero_chex as chex
+    import zero_flax
+    from zero_flax import nnx
+    from zero_flax.core import FrozenDict
+    from zero_jax.numpy import ndarray as JaxArray
+    from zero_grain import (
+        MixedIterDataset,
+        MixedMapDataset,
+        PyGrainCheckpointHandler,
+        PyGrainCheckpointRestore,
+        PyGrainCheckpointSave,
+        put_batch_on_sharding,
+        register_with_orbax,
+        validate_restored_state,
+    )
+    from zero_grain._rng import DeterministicGenerator, derive_rng
+    from zero_grain._types import _ZERO_JAX_NUMPY_ADAPTER, CompilerTensor, array_to_list
+    from zero_grain._tree import (
+        _assert_same_structure,
+        _batch_elements,
+        _convert_leaf_batch,
+        _map_tree,
+        _pad_batch_elements,
+        _pad_jax_leaf,
+        _zero_like_element,
+    )
+    from zero_grain.checkpoint import _coerce_state_dict
+    from zero_grain.dataset import _evaluate_weights_at_step, _extract_weight_float
+    from zero_grain.record import (
+        _chex_flatten_record,
+        _chex_flatten_record_metadata,
+        _chex_unflatten_record,
+        _chex_unflatten_record_metadata,
+        register_record_pytrees,
+    )
+    import zero_jax
+    import zero_orbax
+
+    def _f32(vals: list[float] | list[list[float]] | float) -> JaxArray:
+        """Construct a ``float32`` ``JaxArray`` from Python floats.
+
+        Args:
+            vals (list[float] | list[list[float]] | float): Input float values.
+
+        Returns:
+            JaxArray: Constructed ``zero_jax.numpy.ndarray``.
+        """
+        return _ZERO_JAX_NUMPY_ADAPTER.array(vals, dtype="float32")
+
+    # 1. Verify Record and RecordMetadata custom PyTree registration with zero_jax.jit, nnx.Jit, and chex
+    from zero_grain.record import _RECORD_PYTREES_REGISTERED
+
+    register_record_pytrees()
+    _RECORD_PYTREES_REGISTERED[0] = False
+    meta_node = RecordMetadata(index=3, record_key=5)
+    _RECORD_PYTREES_REGISTERED[0] = False
+    rec_node: Record[JaxArray] = Record(metadata=meta_node, data=_f32([1.0, 2.0]))
+    assert _chex_flatten_record_metadata(None) == ((), ())
+    assert _chex_flatten_record(None) == ((), ())
+    vals_m, fields_m = _chex_flatten_record_metadata(meta_node)
+    rebuilt_m = _chex_unflatten_record_metadata(fields_m, vals_m)
+    assert isinstance(rebuilt_m, RecordMetadata) and rebuilt_m.index == 3 and rebuilt_m.record_key == 5
+    vals_r, fields_r = _chex_flatten_record(rec_node)
+    rebuilt_r = _chex_unflatten_record(fields_r, vals_r)
+    assert isinstance(rebuilt_r, Record)
+    chex.assert_trees_all_close(meta_node, RecordMetadata(index=3, record_key=5))
+
+    from zero_chex.types import LeafValue
+    from zero_orbax.types import PyTree as OrbaxPyTree
+
+    def _scale_leaf(*leaves: LeafValue) -> LeafValue:
+        """Double ``JaxArray`` leaf values.
+
+        Args:
+            *leaves (LeafValue): Leaf values from ``chex.trees.tree_map``.
+
+        Returns:
+            LeafValue: Scaled leaf value.
+        """
+        first_leaf = leaves[0]
+        return first_leaf * 2.0 if isinstance(first_leaf, JaxArray) else first_leaf
+
+    jit_mapped = chex.trees.tree_map(_scale_leaf, rec_node)
+    assert isinstance(jit_mapped, Record) and isinstance(jit_mapped.data, JaxArray)
+    assert isinstance(chex.trees.tree_map(_scale_leaf, meta_node), RecordMetadata)
+    chex.assert_trees_all_close(jit_mapped, Record(metadata=meta_node, data=_f32([2.0, 4.0])))
+
+    jit_mod = nnx.Jit(nnx.Linear(2, 2, rngs=nnx.Rngs(0)))
+    jit_arr_out = jit_mod(rec_node.data)
+    assert isinstance(jit_arr_out, JaxArray) and jit_arr_out.shape == (2,)
+
+    # 2. Verify DeterministicGenerator .jax_key(), .flax_rngs(), and derive_rng with PRNGKey & RngStream
+    raw_gen = DeterministicGenerator(seed=123)
+    k1 = raw_gen.jax_key()
+    k2 = raw_gen.jax_key()
+    assert isinstance(k1, JaxArray) and k1.shape == (2,)
+    assert array_to_list(k1) != array_to_list(k2)
+    flax_rngs_inst = raw_gen.flax_rngs()
+    assert isinstance(flax_rngs_inst, nnx.Rngs)
+    dropout_mod = nnx.Dropout(rate=0.25, rngs=flax_rngs_inst)
+    dropped_arr = dropout_mod(_f32([1.0, 1.0, 1.0, 1.0]))
+    assert isinstance(dropped_arr, JaxArray) and dropped_arr.shape == (4,)
+
+    prng_key_base = zero_jax.random.PRNGKey(99)
+    assert isinstance(prng_key_base, JaxArray)
+    derived_from_key = derive_rng(prng_key_base, index=2, op_seed=7)
+    assert isinstance(derived_from_key.jax_key(), JaxArray)
+    seq_with_stream = SequentialSampler(num_records=3, seed=flax_rngs_inst.default)
+    assert seq_with_stream.seed is not None
+    idx_with_stream = IndexSampler(num_records=3, seed=flax_rngs_inst.default)
+    assert idx_with_stream.seed is not None
+
+    # 3. Verify PyTree helpers for FrozenDict, FlaxState, FlaxVariable, and as_jax_array
+    _assert_same_structure([{"a": 1}])
+    assert _convert_leaf_batch(["hello", "world"], as_jax_array=True) == ["hello", "world"]
+    with pytest.raises(ValueError, match="inhomogeneous leaf shapes"):
+        _convert_leaf_batch([_f32([1.0, 1.0]), _f32([1.0, 1.0, 1.0])], as_jax_array=True)
+
+    v1: nnx.Param[JaxArray] = nnx.Param(_f32([1.0, 2.0]))
+    v2: nnx.Param[JaxArray] = nnx.Param(_f32([3.0, 4.0]))
+    batched_var = _batch_elements([v1, v2], as_jax_array=True)
+    assert isinstance(batched_var, nnx.Param) and batched_var.value.shape == (2, 2)
+    v_scalar: nnx.Param[int] = nnx.Param(1)
+    batched_scalar_var = _batch_elements([v_scalar, nnx.Param(2)], as_jax_array=False)
+    assert isinstance(batched_scalar_var, nnx.Param)
+    with pytest.raises(TypeError, match="Record structures do not match"):
+        _batch_elements([v1, nnx.BatchStat(_f32([1.0, 2.0]))])
+
+    zero_var = _zero_like_element(v1)
+    assert isinstance(zero_var, nnx.Param)
+    zero_var_scalar = _zero_like_element(v_scalar)
+    assert isinstance(zero_var_scalar, nnx.Param)
+
+    st1 = nnx.State({"w": v1})
+    st2 = nnx.State({"w": v2})
+    batched_st = _batch_elements([st1, st2], as_jax_array=True)
+    assert isinstance(batched_st, nnx.State)
+    assert isinstance(_zero_like_element(st1), nnx.State)
+
+    fd1 = FrozenDict({"k": _f32([1.0, 2.0])})
+    fd2 = FrozenDict({"k": _f32([3.0, 4.0])})
+    batched_fd = _batch_elements([fd1, fd2], as_jax_array=True)
+    assert isinstance(batched_fd, FrozenDict)
+    assert isinstance(_zero_like_element(fd1), FrozenDict)
+    assert isinstance(_map_tree(lambda x: x, v1), nnx.Param)
+    assert isinstance(_map_tree(lambda x: x, v_scalar), nnx.Param)
+    assert isinstance(_map_tree(lambda x: x, st1), nnx.State)
+    assert isinstance(_map_tree(lambda x: x, fd1), FrozenDict)
+
+    batched_list_jax = _batch_elements([[1.0, 2.0], [3.0, 4.0]], as_jax_array=True)
+    assert isinstance(batched_list_jax, JaxArray)
+    assert _pad_jax_leaf("not_jax", pad_len=1, batch_size=2) == "not_jax"
+    padded_jax = _pad_batch_elements([_f32([1.0, 2.0])], batch_size=3, as_jax_array=True)
+    assert isinstance(padded_jax, JaxArray) and padded_jax.shape == (3, 2)
+
+    class _CustomMap(Mapping[str, ElementTree]):
+        """Custom non-dict Mapping for testing ``_map_tree`` generic Mapping branch."""
+
+        def __init__(self, data: dict[str, ElementTree]) -> None:
+            """Initialize ``_CustomMap``.
+
+            Args:
+                data (dict[str, ElementTree]): Backing dict.
+            """
+            self._data = data
+
+        def __getitem__(self, key: str) -> ElementTree:
+            """Return value for ``key``.
+
+            Args:
+                key (str): Key string.
+
+            Returns:
+                ElementTree: Stored value.
+            """
+            return self._data[key]
+
+        def __iter__(self) -> Iterator[str]:
+            """Iterate keys.
+
+            Returns:
+                Iterator[str]: Key iterator.
+            """
+            return iter(self._data)
+
+        def __len__(self) -> int:
+            """Return mapping size.
+
+            Returns:
+                int: Number of keys.
+            """
+            return len(self._data)
+
+    mapped_custom = _map_tree(lambda x: (int(x) if isinstance(x, int) else 0) + 1, _CustomMap({"a": 2}))
+    assert mapped_custom == {"a": 3}
+
+    # 4. Verify put_batch_on_sharding with SingleDeviceSharding and GlobalArraySharding
+    single_sharding = zero_jax.sharding.SingleDeviceSharding("cpu:0")
+    global_sharding = zero_orbax.core.GlobalArraySharding()
+    sharded_b1 = put_batch_on_sharding(
+        {"x": _f32([[1.0, 1.0], [1.0, 1.0]]), "count": 4, "tag": "train"},
+        sharding=single_sharding,
+    )
+    assert isinstance(sharded_b1, dict) and isinstance(sharded_b1["x"], JaxArray) and sharded_b1["tag"] == "train"
+    sharded_b2 = put_batch_on_sharding(
+        _f32([[1.0, 1.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]]),
+        sharding=global_sharding,
+        host_id=0,
+        num_hosts=2,
+    )
+    assert isinstance(sharded_b2, JaxArray) and sharded_b2.shape == (2, 2)
+
+    # 5. Full Pipeline: MapDataset.source -> .seed(Rngs(42)) -> .random_map(zero_jax.random)
+    # -> MixedMapDataset(zero_optax.linear_schedule) -> .batch(batch_size=4, as_jax_array=True)
+    # -> nnx.Linear -> zero_optax.adam -> zero_orbax.CheckpointManager -> chex.assert_trees_all_close
+    raw_samples_a: list[dict[str, JaxArray]] = [
+        {"x": _f32([float(i), float(i + 1)]), "y": _f32([float(2 * i + 1)])} for i in range(8)
+    ]
+    raw_samples_b: list[dict[str, JaxArray]] = [
+        {"x": _f32([float(i + 10), float(i + 11)]), "y": _f32([float(2 * (i + 10) + 1)])} for i in range(8)
+    ]
+
+    def _augment_sample(sample: ElementTree, rng: RNGGeneratorProtocol) -> ElementTree:
+        """Apply small deterministic ``zero_jax.random.normal`` noise to ``sample['x']``.
+
+        Args:
+            sample (ElementTree): Input sample dict.
+            rng (RNGGeneratorProtocol): Per-record deterministic generator.
+
+        Returns:
+            ElementTree: Augmented sample dict.
+        """
+        if isinstance(sample, Mapping) and isinstance(rng, DeterministicGenerator):
+            x_val = sample["x"]
+            y_val = sample["y"]
+            if isinstance(x_val, JaxArray) and isinstance(y_val, JaxArray):
+                raw_noise = zero_jax.random.normal(rng.jax_key(), shape=x_val.shape, dtype="float32")
+                if isinstance(raw_noise, JaxArray):
+                    return {"x": x_val + raw_noise * 0.01, "y": y_val}
+        return sample
+
+    ds_a: MapDataset[ElementTree] = (
+        MapDataset.source(raw_samples_a)
+        .seed(zero_flax.nnx.Rngs(42))
+        .shuffle(zero_flax.nnx.Rngs(42))
+        .random_map(_augment_sample, seed=zero_flax.nnx.Rngs(42))
+    )
+    ds_b: MapDataset[ElementTree] = (
+        MapDataset.source(raw_samples_b).seed(zero_flax.nnx.Rngs(99)).random_map(_augment_sample)
+    )
+
+    sched_a = zero_optax.linear_schedule(init_value=0.8, end_value=0.2, transition_steps=16)
+    sched_b = zero_optax.cosine_decay_schedule(init_value=0.2, decay_steps=16, alpha=0.5)
+    mixed_ds: MixedMapDataset[ElementTree] = MixedMapDataset(
+        [ds_a, ds_b],
+        weights=[sched_a, sched_b],
+    )
+    batched_pipeline: BatchDataset[ElementTree] = mixed_ds.batch(
+        batch_size=4,
+        drop_remainder=True,
+        as_jax_array=True,
+    )
+    assert len(batched_pipeline) == 4
+
+    # Also verify MixedMapDataset & MixedIterDataset edge cases and callable schedule weights
+    assert len(MixedMapDataset()) == 0
+    explicit_sel = DatasetSelectionMap(parent_lengths=[8, 8])
+    assert len(MixedMapDataset([ds_a, ds_b], selection_map=explicit_sel)) == 16
+    assert len(MixedMapDataset([ds_a, ds_b], weights=None)) == 16
+    callable_mixed = MixedMapDataset([ds_a, ds_b], weights=lambda step: [1.0 + 0.0 * step, 1.0])
+    assert len(callable_mixed) == 16
+    assert _evaluate_weights_at_step([], 0, 2) == (0.5, 0.5)
+    assert _evaluate_weights_at_step("non_sequence", 0, 2) == (0.5, 0.5)
+    assert _extract_weight_float(_f32([2.5])) == 2.5
+    from zero_grain.testing import _trees_equal
+
+    @chex.dataclass
+    class _MiniDC:
+        """Minimal mappable dataclass for ``_trees_equal`` coverage."""
+
+        a: int
+
+    assert _trees_equal(_f32([1.0, 2.0]), _f32([1.0, 2.0])) is True
+    assert _trees_equal(np.array(["a", "b"]), np.array(["a", "b"])) is True
+    assert _trees_equal(_MiniDC(a=5), _MiniDC(a=5)) is True
+    iter_mixed: MixedIterDataset[ElementTree] = MixedIterDataset(
+        [ds_a.to_iter_dataset(), ds_b],
+        weights=[sched_a, sched_b],
+    )
+    iter_batched: IterDataset[ElementTree] = iter_mixed.random_map(
+        _augment_sample,
+        seed=zero_flax.nnx.Rngs(7),
+    ).batch(
+        batch_size=4,
+        as_jax_array=True,
+    )
+    first_iter_batch = next(iter(iter_batched))
+    assert isinstance(first_iter_batch, dict) and isinstance(first_iter_batch["x"], JaxArray)
+    assert isinstance(IterDataset.mix([ds_a, ds_b], weights=[0.5, 0.5]), MixedIterDataset)
+
+    # Train 1 step with zero_flax.nnx.Linear and zero_optax.adam, then checkpoint with zero_orbax
+    model = zero_flax.nnx.Linear(in_features=2, out_features=1, rngs=zero_flax.nnx.Rngs(0))
+    tx = zero_optax.adam(learning_rate=0.05)
+    graphdef, model_state = zero_flax.nnx.split(model)
+    opt_state = tx.init(model_state.to_optax_tree())
+
+    train_iter = iter(batched_pipeline)
+    batch_step0 = next(train_iter)
+    assert isinstance(batch_step0, dict)
+    bx0 = batch_step0["x"]
+    by0 = batch_step0["y"]
+    assert isinstance(bx0, JaxArray) and isinstance(by0, JaxArray)
+    chex.assert_axis_dimension(bx0, 0, 4)
+
+    preds0 = model(bx0)
+    assert isinstance(preds0, JaxArray)
+    assert model.bias is not None
+    grad_kernel = _ZERO_JAX_NUMPY_ADAPTER.zeros_like(model.kernel.value) + 0.1
+    grad_bias = _ZERO_JAX_NUMPY_ADAPTER.zeros_like(model.bias.value) + 0.1
+    _, current_state = zero_flax.nnx.split(model)
+    grads_tree = current_state.to_optax_tree()
+    grads_tree["kernel"] = grad_kernel._tensor
+    grads_tree["bias"] = grad_bias._tensor
+    updates, opt_state = tx.update(grads_tree, opt_state, current_state.to_optax_tree())
+    new_params = zero_optax.apply_updates(current_state.to_optax_tree(), updates)
+    assert isinstance(new_params, dict)
+    updated_state = zero_flax.nnx.State.from_optax_tree(new_params, current_state)
+    zero_flax.nnx.update(model, updated_state)
+
+    # Save iterator + model + optimizer atomically via zero_orbax.CheckpointManager
+    assert model.bias is not None
+    model_orbax_tree: dict[str, OrbaxPyTree] = {
+        "kernel": model.kernel.value._tensor,
+        "bias": model.bias.value._tensor,
+    }
+    ckpt_dir = tmp_path / "orbax_grain_ckpt"
+    custom_reg = register_with_orbax(item_name="iterator")
+    assert custom_reg.has("iterator", PyGrainCheckpointSave)
+    mgr = zero_orbax.checkpoint.CheckpointManager(ckpt_dir)
+    mgr.save(
+        step=1,
+        args=zero_orbax.checkpoint.args.Composite(
+            iterator=PyGrainCheckpointSave(train_iter),
+            model=zero_orbax.checkpoint.args.StandardSave(model_orbax_tree),
+            optimizer=zero_orbax.checkpoint.args.StandardSave(zero_optax.opt_state_to_state_dict(opt_state)),
+        ),
+    )
+
+    # Advance original iterator one more batch
+    expected_next_batch = next(train_iter)
+
+    # Restore into fresh iterator, model state, and optimizer state
+    restored_iter = iter(batched_pipeline)
+    restored_bundle = mgr.restore(
+        step=1,
+        args=zero_orbax.checkpoint.args.Composite(
+            iterator=PyGrainCheckpointRestore(restored_iter),
+            model=zero_orbax.checkpoint.args.StandardRestore(),
+            optimizer=zero_orbax.checkpoint.args.StandardRestore(),
+        ),
+    )
+    restored_next_batch = next(restored_iter)
+    assert isinstance(restored_next_batch, dict) and isinstance(expected_next_batch, dict)
+    assert isinstance(restored_next_batch["x"], JaxArray) and isinstance(expected_next_batch["x"], JaxArray)
+    chex.assert_trees_all_close(restored_next_batch["x"], expected_next_batch["x"])
+
+    assert isinstance(restored_bundle, dict)
+    restored_model_raw = restored_bundle["model"]
+    restored_model_state = (
+        zero_flax.nnx.State.from_optax_tree(
+            {str(k): v for k, v in restored_model_raw.items() if isinstance(v, (int, float, JaxArray, CompilerTensor))},
+            updated_state,
+        )
+        if isinstance(restored_model_raw, Mapping)
+        else updated_state
+    )
+    restored_model = zero_flax.nnx.merge(graphdef, restored_model_state)
+    pred_orig = model(expected_next_batch["x"])
+    pred_restored = restored_model(expected_next_batch["x"])
+    assert isinstance(pred_orig, JaxArray) and isinstance(pred_restored, JaxArray)
+    chex.assert_trees_all_close(pred_orig, pred_restored)
+    mgr.close()
+
+    # Verify raw state dict save/restore and validate_restored_state branches
+    raw_state_dir = tmp_path / "raw_state_ckpt"
+    handler = PyGrainCheckpointHandler()
+    handler.save(raw_state_dir, PyGrainCheckpointSave(restored_iter.get_state()))
+    restored_raw = handler.restore(raw_state_dir)
+    assert isinstance(restored_raw, dict) and restored_raw["version"] == 2
+    handler.save(raw_state_dir, {"not_indices": 1})
+    validate_restored_state(restored_iter.get_state(), restored_iter)
+    dl_iter = iter(DataLoader(data_source=RangeDataSource(0, 4, 1), sampler=SequentialSampler(num_records=4)))
+    validate_restored_state(dl_iter.get_state(), dl_iter)
+    validate_restored_state({"version": 2, "last_seen_indices": {}, "sampler": "", "data_source": ""}, dl_iter)
+    assert _coerce_state_dict({"not_indices": 1}) is None
+    with pytest.raises(ValueError, match="Checkpoint version"):
+        validate_restored_state(
+            {"version": 99, "last_seen_indices": {}, "sampler": "", "data_source": ""},
+            restored_iter,
+        )
+    with pytest.raises(ValueError, match="Checkpoint sampler"):
+        validate_restored_state(
+            {"version": 2, "last_seen_indices": {}, "sampler": "MismatchSampler()", "data_source": ""},
+            dl_iter,
+        )
+    with pytest.raises(ValueError, match="Checkpoint data_source"):
+        validate_restored_state(
+            {"version": 2, "last_seen_indices": {}, "sampler": "", "data_source": "MismatchSource()"},
+            dl_iter,
+        )

@@ -10,6 +10,8 @@ from zero_grain.checkpoint import (
     PyGrainCheckpointHandler,
     PyGrainCheckpointRestore,
     PyGrainCheckpointSave,
+    register_with_orbax,
+    validate_restored_state,
 )
 from zero_grain.data_loader import (
     DataLoader,
@@ -34,6 +36,8 @@ from zero_grain.dataset import (
     FilterDataset,
     IterDataset,
     MapDataset,
+    MixedIterDataset,
+    MixedMapDataset,
     SelectionWithReplacementMap,
     apply_transformations,
     get_element_spec,
@@ -63,6 +67,7 @@ from zero_grain.sharding import (
     ShardByJaxProcess,
     ShardOptions,
     even_split,
+    put_batch_on_sharding,
 )
 from zero_grain.shared_memory_array import (
     SharedMemoryArray,
@@ -123,6 +128,8 @@ __all__ = [
     "MapWithIndex",
     "MapWithIndexOperation",
     "MapWithIndexTransform",
+    "MixedIterDataset",
+    "MixedMapDataset",
     "MultiprocessingOptions",
     "NoSharding",
     "Operation",
@@ -162,8 +169,11 @@ __all__ = [
     "get_element_spec",
     "load",
     "map_tree",
+    "put_batch_on_sharding",
+    "register_with_orbax",
     "sharding",
     "shared_memory_array",
     "spec_like",
     "transforms",
+    "validate_restored_state",
 ]

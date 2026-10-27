@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from zero_flax.nnx.rnglib import Rngs as FlaxRngs
+from zero_flax.nnx.rnglib import RngStream as FlaxRngStream, Rngs as FlaxRngs
 from zero_grain._rng import _resolve_seed_int, derive_rng, index_shuffle
-from zero_grain._types import ArrayProtocol, ElementTree
+from zero_grain._types import ArrayProtocol, ElementTree, SeedSpec
 from zero_grain.record import RecordMetadata
 from zero_grain.sharding import NoSharding, ShardOptions, even_split
 
@@ -62,7 +62,7 @@ class SequentialSampler(Sampler):
         num_records: int = 1,
         shard_options: ShardOptions | None = None,
         num_epochs: int | None = None,
-        seed: int | None = None,
+        seed: SeedSpec | None = None,
     ) -> None:
         """Initialize ``SequentialSampler``.
 
@@ -70,7 +70,7 @@ class SequentialSampler(Sampler):
             num_records (int): Total number of records in the dataset (must be ``> 0``).
             shard_options (ShardOptions | None): Sharding configuration across processes.
             num_epochs (int | None): Optional number of epochs to iterate (defaults to 1 if None).
-            seed (int | None): Optional seed for deterministic RNG attachment.
+            seed (SeedSpec | None): Optional seed, ``PRNGKey``, ``Rngs``, or ``RngStream`` for RNG attachment.
 
         Raises:
             ValueError: If ``num_records <= 0`` or ``num_epochs <= 0``.
@@ -83,7 +83,7 @@ class SequentialSampler(Sampler):
         self.num_records = num_records
         self.shard_options: ShardOptions = shard_options if shard_options is not None else NoSharding()
         self.num_epochs = num_epochs
-        self.seed = seed
+        self.seed = _resolve_seed_int(seed)
         effective_epochs = num_epochs if num_epochs is not None else 1
         total_records = num_records * effective_epochs
         if self.shard_options.drop_remainder:
@@ -146,7 +146,7 @@ class IndexSampler(Sampler):
         shard_options: ShardOptions | None = None,
         shuffle: bool = False,
         num_epochs: int | None = None,
-        seed: int | ElementTree | None = None,
+        seed: SeedSpec | ElementTree | None = None,
     ) -> None:
         """Initialize ``IndexSampler``.
 
@@ -155,11 +155,11 @@ class IndexSampler(Sampler):
             shard_options (ShardOptions | None): Sharding configuration (defaults to ``NoSharding()``).
             shuffle (bool): Whether to shuffle record keys within each epoch.
             num_epochs (int | None): Optional number of epochs (None for 1 epoch).
-            seed (int | ElementTree | None): Integer seed in ``[0, 2**32)`` used for shuffling and RNG derivation.
+            seed (SeedSpec | ElementTree | None): Integer seed, ``PRNGKey``, ``Rngs``, or ``RngStream``.
 
         Raises:
             ValueError: If ``num_records <= 0``, ``num_epochs <= 0``, or ``seed`` is outside ``[0, 2**32)``.
-            TypeError: If ``seed`` is not an integer.
+            TypeError: If ``seed`` is not an integer or supported PRNG key object.
         """
         super().__init__()
         if num_records <= 0:
@@ -168,7 +168,7 @@ class IndexSampler(Sampler):
             raise ValueError(f"num_epochs must be positive, got {num_epochs}")
         validated_seed: int | None = None
         if seed is not None:
-            if isinstance(seed, (ArrayProtocol, FlaxRngs)):
+            if isinstance(seed, (ArrayProtocol, FlaxRngs, FlaxRngStream)):
                 validated_seed = _resolve_seed_int(seed)
             elif not isinstance(seed, int) or isinstance(seed, bool):
                 raise TypeError("seed must be an integer")

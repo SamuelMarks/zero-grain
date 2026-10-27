@@ -936,6 +936,9 @@ def test_scripts_execution(tmp_path: Path) -> None:
     bare_file.write_text("# empty", encoding="utf-8")
     assert check_deps.check_file(bare_file) == []
 
+    from scripts import check_typing_ast
+
+    assert check_typing_ast.main(["src", "scripts"]) == 0
     assert check_typing_discipline.main(["src", "scripts"]) == 0
     assert check_typing_discipline.main([str(tmp_path / "missing_typing_dir")]) == 1
     assert len(check_typing_discipline.check_file_typing(syntax_err_file)) == 1
@@ -1085,3 +1088,9 @@ def test_scripts_execution(tmp_path: Path) -> None:
         text=True,
     )
     assert proc.returncode == 0
+
+    assert Path("src/zero_grain/py.typed").is_file()
+    pyproject_text = Path("pyproject.toml").read_text(encoding="utf-8")
+    assert 'follow_imports = "silent"\nignore_missing_imports = true' in pyproject_text
+    ci_text = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "ml_switcheroo_compiler.__file__" in ci_text and "py.typed" in ci_text
